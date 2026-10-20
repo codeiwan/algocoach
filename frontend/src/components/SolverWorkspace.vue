@@ -7,6 +7,13 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import type { ProgrammingLanguage } from '@/types/programming-language'
 
+import {
+  evaluateAnalysisTrigger,
+  type CodeSnapshot,
+  type TriggerDecision,
+  type TriggerSuggestion,
+} from '@/services/analysis-trigger'
+
 const props = defineProps<{
   problemText: string
 }>()
@@ -39,16 +46,12 @@ const errorMessage = ref('')
 
 type ObservationPhase = 'waiting' | 'editing' | 'settled'
 
-interface CodeSnapshot {
-  language: ProgrammingLanguage
-  code: string
-  revision: number
-}
-
 const OBSERVATION_DELAY_MS = 800
 
 const observationPhase = ref<ObservationPhase>('waiting')
 const stableSnapshot = ref<CodeSnapshot | null>(null)
+const triggerDecision = ref<TriggerDecision | null>(null)
+const lastSuggestion = ref<TriggerSuggestion | null>(null)
 
 let observationTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -64,32 +67,31 @@ const observationStatusText = computed(() => {
 })
 
 watch([selectedLanguage, currentCode], () => {
-  // 1. 변경사항을 즉시 반영합니다.
+  // 1. Code or language changed.
   codeRevision.value += 1
   analysisResult.value = null
   errorMessage.value = ''
 
-  // 이전 안정 스냅샷은 더 이상 최신 상태가 아닙니다.
   stableSnapshot.value = null
+  triggerDecision.value = null
   observationPhase.value = 'editing'
 
-  // 2. 이전 대기 타이머를 취소합니다.
+  // 2. Cancel the previous debounce timer.
   if (observationTimer !== null) {
     clearTimeout(observationTimer)
   }
 
-  // 3. 현재 코드 상태를 복사합니다.
+  // 3. Capture the current state.
   const snapshot: CodeSnapshot = {
     language: selectedLanguage.value,
     code: currentCode.value,
     revision: codeRevision.value,
   }
 
-  // 4. 마지막 변경 이후 800ms가 지나면 안정 상태로 전환합니다.
+  // 4. Wait for a stable editing state.
   observationTimer = setTimeout(() => {
     observationTimer = null
 
-    // 대기 중 코드나 언어가 바뀌었다면 폐기합니다.
     if (
       snapshot.revision !== codeRevision.value ||
       snapshot.language !== selectedLanguage.value ||
@@ -98,8 +100,26 @@ watch([selectedLanguage, currentCode], () => {
       return
     }
 
+    // 5. Evaluate the analysis trigger policy.
+    const nowMs = Date.now()
+
+    const decision = evaluateAnalysisTrigger(
+      snapshot,
+      lastSuggestion.value,
+      nowMs,
+    )
+
     stableSnapshot.value = snapshot
+    triggerDecision.value = decision
     observationPhase.value = 'settled'
+
+    // 6. Record eligible candidates.
+    if (decision.eligible) {
+      lastSuggestion.value = {
+        snapshot,
+        suggestedAtMs: nowMs,
+      }
+    }
   }, OBSERVATION_DELAY_MS)
 })
 
@@ -253,6 +273,19 @@ function returnToProblemInput() {
               Revision {{ stableSnapshot.revision }}
               · {{ stableSnapshot.language }}
             </p>
+
+            <div v-if="triggerDecision" class="trigger-decision">
+              <p>
+                분석 후보:
+                <strong>
+                  {{ triggerDecision.eligible ? '추천' : '보류' }}
+                </strong>
+              </p>
+
+              <p class="trigger-reason">
+                {{ triggerDecision.message }}
+              </p>
+            </div>
 
             <p class="observation-description">
               코드 변경 후 0.8초 동안 추가 입력이 없으면
@@ -553,6 +586,17 @@ function returnToProblemInput() {
 
 .observation-description {
   margin-top: 12px !important;
+  color: #64748b;
+}
+
+.trigger-decision {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.trigger-reason {
+  margin-top: 6px !important;
   color: #64748b;
 }
 </style>
