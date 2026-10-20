@@ -1,240 +1,203 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref } from 'vue'
 
-import { analyzeCode } from '@/services/analysis'
-import type { AnalysisResult } from '@/types/analysis'
+import SolverWorkspace from '@/components/SolverWorkspace.vue'
 
-const problemText = ref('그래프의 최단 경로를 구하세요.')
-const currentCode = ref('import heapq\n')
+const problemText = ref('')
+const activeProblem = ref<string | null>(null)
 
-const codeRevision = ref(0)
-const isAnalyzing = ref(false)
-
-const analysisResult = ref<AnalysisResult | null>(null)
-const errorMessage = ref('')
-
-// 코드가 변경되면 Revision을 증가시키고 이전 결과를 초기화합니다.
-watch(currentCode, () => {
-  codeRevision.value += 1
-  analysisResult.value = null
-  errorMessage.value = ''
-})
-
-watch(problemText, () => {
-  analysisResult.value = null
-  errorMessage.value = ''
-})
-
-async function runAnalysis() {
-  if (isAnalyzing.value || !problemText.value.trim()) {
+function startSolving() {
+  if (!problemText.value.trim()) {
     return
   }
 
-  const revision = codeRevision.value
-  const problemSnapshot = problemText.value
-  const codeSnapshot = currentCode.value
+  activeProblem.value = problemText.value
+}
 
-  isAnalyzing.value = true
-  analysisResult.value = null
-  errorMessage.value = ''
-
-  try {
-    const result = await analyzeCode({
-      session_id: 'vue-dev-session',
-      code_revision: revision,
-      problem_text: problemSnapshot,
-      current_code: codeSnapshot,
-    })
-
-    // 분석 중 입력 내용이 변경되었다면 이전 결과를 표시하지 않습니다.
-    if (
-      revision !== codeRevision.value ||
-      problemSnapshot !== problemText.value
-    ) {
-      errorMessage.value = '분석 중 입력이 변경되었습니다. 다시 분석해 주세요.'
-      return
-    }
-
-    analysisResult.value = result
-  } catch (error) {
-    errorMessage.value =
-      error instanceof Error ? error.message : '알 수 없는 오류가 발생했습니다.'
-  } finally {
-    isAnalyzing.value = false
-  }
+function returnToHome() {
+  activeProblem.value = null
 }
 </script>
 
 <template>
-  <main class="container">
-    <header>
-      <h1>AlgoCoach</h1>
-      <p>LangGraph Mock Analysis Test</p>
-    </header>
+  <main class="app-shell">
+    <section v-if="activeProblem === null" class="home">
+      <header class="home-header">
+        <span class="eyebrow">AI CODING COACH</span>
+        <h1>AlgoCoach</h1>
+        <p>
+          코딩테스트 문제를 입력하고 풀이를 시작하세요.
+          AI가 풀이 과정을 관찰하고 필요한 순간에 도움을 제공합니다.
+        </p>
+      </header>
 
-    <form class="editor-form" @submit.prevent="runAnalysis">
-      <label for="problem">문제 설명</label>
+      <form class="problem-form" @submit.prevent="startSolving">
+        <label for="problem-input">문제 입력</label>
 
-      <textarea
-        id="problem"
-        v-model="problemText"
-        rows="4"
-        placeholder="코딩테스트 문제를 입력하세요."
-      />
+        <textarea
+          id="problem-input"
+          v-model="problemText"
+          rows="14"
+          placeholder="문제 설명, 입력 조건, 출력 조건, 예제를 붙여넣으세요."
+        />
 
-      <div class="label-row">
-        <label for="code">Python 코드</label>
-        <span>Revision {{ codeRevision }}</span>
-      </div>
+        <div class="form-footer">
+          <span>현재 지원 언어: Python</span>
 
-      <textarea
-        id="code"
-        v-model="currentCode"
-        rows="10"
-        spellcheck="false"
-        class="code-editor"
-        placeholder="Python 코드를 작성하세요."
-      />
+          <button type="submit" :disabled="!problemText.trim()">
+            풀이 시작 →
+          </button>
+        </div>
+      </form>
 
-      <button
-        type="submit"
-        :disabled="isAnalyzing || !problemText.trim()"
-      >
-        {{ isAnalyzing ? '분석 중...' : 'Mock 분석 실행' }}
-      </button>
-    </form>
-
-    <section v-if="analysisResult" class="result">
-      <h2>분석 결과</h2>
-
-      <dl>
-        <dt>분석 Revision</dt>
-        <dd>{{ analysisResult.analyzed_revision }}</dd>
-
-        <dt>진행 상태</dt>
-        <dd>{{ analysisResult.progress_status }}</dd>
-
-        <dt>알고리즘</dt>
-        <dd>{{ analysisResult.algorithm ?? '미판단' }}</dd>
-      </dl>
-
-      <p>{{ analysisResult.summary }}</p>
-
-      <p v-if="analysisResult.positive_observation">
-        {{ analysisResult.positive_observation }}
-      </p>
-
-      <p v-if="analysisResult.issues.length">
-        발견된 문제: {{ analysisResult.issues.length }}개
+      <p class="notice">
+        현재 개발 단계에서는 입력한 문제를 그대로 표시합니다.
+        AI 문제 구조화 기능은 추후 연결됩니다.
       </p>
     </section>
 
-    <p v-if="errorMessage" class="error" role="alert">
-      {{ errorMessage }}
-    </p>
+    <SolverWorkspace
+      v-else
+      :problem-text="activeProblem"
+      @back="returnToHome"
+    />
   </main>
 </template>
 
 <style scoped>
-.container {
-  max-width: 960px;
-  margin: 48px auto;
-  padding: 24px;
+:global(*) {
+  box-sizing: border-box;
+}
+
+:global(body) {
+  display: block;
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #f8fafc;
+  color: #0f172a;
   font-family: system-ui, sans-serif;
 }
 
-header {
-  margin-bottom: 32px;
+:global(#app) {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
 }
 
-header h1 {
-  margin-bottom: 8px;
+.app-shell {
+  min-height: 100vh;
 }
 
-header p {
+.home {
+  width: min(100% - 40px, 850px);
+  margin: 0 auto;
+  padding: 90px 0 60px;
+}
+
+.home-header {
+  margin-bottom: 36px;
+  text-align: center;
+}
+
+.eyebrow {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 12px 0;
+  font-size: 42px;
+  letter-spacing: -0.04em;
+}
+
+.home-header p {
+  max-width: 580px;
+  margin: 0 auto;
   color: #64748b;
+  line-height: 1.8;
 }
 
-.editor-form {
+.problem-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: white;
 }
 
 label {
-  font-weight: 600;
-}
-
-.label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.label-row span {
-  font-size: 13px;
-  color: #64748b;
+  font-weight: 700;
 }
 
 textarea {
   width: 100%;
-  box-sizing: border-box;
-  padding: 12px;
+  padding: 16px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
-  font-size: 14px;
+  background: white;
+  color: #0f172a;
+  font: inherit;
+  line-height: 1.7;
   resize: vertical;
 }
 
-.code-editor {
-  font-family: ui-monospace, monospace;
-  line-height: 1.6;
+textarea:focus {
+  border-color: #2563eb;
+  outline: 2px solid #bfdbfe;
+}
+
+.form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.form-footer span,
+.notice {
+  color: #64748b;
+  font-size: 13px;
 }
 
 button {
-  align-self: flex-start;
-  padding: 12px 20px;
+  padding: 12px 24px;
   border: none;
   border-radius: 8px;
   background: #2563eb;
   color: white;
+  font: inherit;
+  font-weight: 600;
   cursor: pointer;
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.result {
-  margin-top: 32px;
-  padding: 24px;
-  border: 1px solid #bbf7d0;
-  border-radius: 12px;
-  background: #f0fdf4;
-  color: #14532d;
+.notice {
+  margin-top: 20px;
+  text-align: center;
 }
 
-.result h2 {
-  margin-top: 0;
-}
+@media (max-width: 600px) {
+  .home {
+    padding-top: 48px;
+  }
 
-.result dl {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 8px;
-}
+  .problem-form {
+    padding: 18px;
+  }
 
-.result dt {
-  font-weight: 600;
-}
-
-.result dd {
-  margin: 0;
-}
-
-.error {
-  margin-top: 24px;
-  color: #dc2626;
+  .form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 </style>
