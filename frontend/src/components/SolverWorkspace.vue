@@ -4,6 +4,8 @@ import { ref, watch } from 'vue'
 import { analyzeCode } from '@/services/analysis'
 import type { AnalysisResult } from '@/types/analysis'
 
+import PythonCodeEditor from '@/components/PythonCodeEditor.vue'
+
 const props = defineProps<{
   problemText: string
 }>()
@@ -108,20 +110,10 @@ function returnToProblemInput() {
         </div>
 
         <div class="editor-content">
-          <label for="python-code" class="sr-only">
-            Python 코드 입력
-          </label>
-
-          <textarea
-            id="python-code"
-            v-model="currentCode"
-            class="code-input"
-            spellcheck="false"
-            placeholder="# 이곳에 Python 코드를 작성하세요."
-          />
+          <PythonCodeEditor v-model="currentCode" />
 
           <div class="editor-footer">
-            <span>임시 코드 입력창 · Monaco 연결 예정</span>
+            <span>Python · 4 Spaces · Monaco Editor</span>
           </div>
         </div>
       </section>
@@ -287,28 +279,8 @@ function returnToProblemInput() {
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   padding: 12px;
-}
-
-.code-input {
-  width: 100%;
-  min-height: 480px;
-  flex: 1;
-  padding: 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #0f172a;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 14px;
-  line-height: 1.7;
-  resize: vertical;
-  tab-size: 4;
-}
-
-.code-input:focus {
-  border-color: #93c5fd;
-  outline: 2px solid #dbeafe;
 }
 
 .editor-footer {
