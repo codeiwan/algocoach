@@ -3,32 +3,20 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 
 import SolverWorkspace from '@/components/SolverWorkspace.vue'
 import StructuredProblemPreview from '@/components/StructuredProblemPreview.vue'
-
 import { structureProblem } from '@/services/problem'
 import type { StructuredProblem } from '@/types/problem'
 
-// --------------------------------------------------
 // Problem input and navigation
-// --------------------------------------------------
-
 const problemText = ref('')
 const activeProblem = ref<string | null>(null)
 
-// --------------------------------------------------
 // AI problem structuring
-// --------------------------------------------------
-
 const structuredProblem = ref<StructuredProblem | null>(null)
-
 const isStructuring = ref(false)
 const structureError = ref('')
 
 let structureAbortController: AbortController | null = null
 
-/**
- * Invalidate an existing structure whenever the
- * original problem text changes.
- */
 watch(problemText, () => {
   structureAbortController?.abort()
   structureAbortController = null
@@ -38,41 +26,30 @@ watch(problemText, () => {
   structureError.value = ''
 })
 
-/**
- * Call the backend to extract the structured problem.
- */
 async function runProblemStructuring() {
   if (!problemText.value.trim() || isStructuring.value) {
     return
   }
 
   const textSnapshot = problemText.value
-
   const controller = new AbortController()
-  structureAbortController = controller
 
+  structureAbortController = controller
   isStructuring.value = true
   structuredProblem.value = null
   structureError.value = ''
 
   try {
     const result = await structureProblem(
-      {
-        problem_text: textSnapshot,
-      },
+      { problem_text: textSnapshot },
       controller.signal,
     )
 
-    // Ignore a cancelled or superseded request.
     if (
       controller.signal.aborted ||
-      structureAbortController !== controller
+      structureAbortController !== controller ||
+      textSnapshot !== problemText.value
     ) {
-      return
-    }
-
-    // Do not display results for an outdated problem.
-    if (textSnapshot !== problemText.value) {
       return
     }
 
@@ -97,15 +74,12 @@ async function runProblemStructuring() {
   }
 }
 
-/**
- * Start the existing solver workspace with the original
- * problem text, regardless of whether AI structuring ran.
- */
 function startSolving() {
   if (!problemText.value.trim() || isStructuring.value) {
     return
   }
 
+  // Preserve the original text for all code analysis requests.
   activeProblem.value = problemText.value
 }
 
@@ -122,10 +96,8 @@ onBeforeUnmount(() => {
 <template>
   <main class="app-shell">
     <section v-if="activeProblem === null" class="home">
-      <!-- Home Header -->
       <header class="home-header">
         <span class="eyebrow">AI CODING COACH</span>
-
         <h1>AlgoCoach</h1>
 
         <p>
@@ -134,14 +106,8 @@ onBeforeUnmount(() => {
         </p>
       </header>
 
-      <!-- Problem Input -->
-      <form
-        class="problem-form"
-        @submit.prevent="startSolving"
-      >
-        <label for="problem-input">
-          문제 입력
-        </label>
+      <form class="problem-form" @submit.prevent="startSolving">
+        <label for="problem-input">문제 입력</label>
 
         <textarea
           id="problem-input"
@@ -153,11 +119,9 @@ onBeforeUnmount(() => {
 
         <div class="form-footer">
           <span>지원 언어: Python · Java · C++ · C</span>
-
           <span>{{ problemText.length.toLocaleString() }} / 20,000자</span>
         </div>
 
-        <!-- Actions -->
         <div class="form-actions">
           <button
             type="button"
@@ -183,7 +147,7 @@ onBeforeUnmount(() => {
 
         <p class="form-hint">
           문제 정리는 선택 사항입니다.
-          AI 분석을 사용하지 않아도 원문으로 풀이를 시작할 수 있습니다.
+          AI 분석을 사용하지 않아도 원문으로 풀이할 수 있습니다.
         </p>
 
         <p
@@ -194,50 +158,35 @@ onBeforeUnmount(() => {
           문제 설명과 입출력 조건, 제약 및 예제를 분석하고 있습니다.
         </p>
 
-        <p
-          v-if="structureError"
-          class="error-message"
-          role="alert"
-        >
+        <p v-if="structureError" class="error-message" role="alert">
           {{ structureError }}
           원문으로 풀이를 시작하는 것은 가능합니다.
         </p>
       </form>
 
-      <!-- Structured Problem Preview -->
-      <section
-        v-if="structuredProblem"
-        class="result-section"
-      >
+      <section v-if="structuredProblem" class="result-section">
         <div class="result-header">
-          <div>
-            <h2>AI 문제 정리 결과</h2>
-            <p>정리된 내용을 검토한 뒤 풀이를 시작하세요.</p>
-          </div>
+          <h2>AI 문제 정리 결과</h2>
+          <p>정리된 내용을 검토한 뒤 풀이를 시작하세요.</p>
         </div>
 
-        <StructuredProblemPreview
-          :problem="structuredProblem"
-        />
+        <StructuredProblemPreview :problem="structuredProblem" />
 
-        <!-- Preserve the original source -->
         <details class="source-details">
           <summary>문제 원문 확인하기</summary>
-
           <pre>{{ problemText }}</pre>
         </details>
       </section>
 
       <p class="notice">
-        다음 단계에서는 풀이 화면의 문제 패널에도
-        구조화된 내용을 연결할 예정입니다.
+        풀이 화면에서도 AI 정리 보기와 원문 보기를 전환할 수 있습니다.
       </p>
     </section>
 
-    <!-- Existing Solver Workspace -->
     <SolverWorkspace
       v-else
       :problem-text="activeProblem"
+      :structured-problem="structuredProblem"
       @back="returnToHome"
     />
   </main>
@@ -269,8 +218,6 @@ onBeforeUnmount(() => {
   min-height: 100vh;
 }
 
-/* Home */
-
 .home {
   width: min(100% - 40px, 850px);
   margin: 0 auto;
@@ -301,8 +248,6 @@ onBeforeUnmount(() => {
   color: #64748b;
   line-height: 1.8;
 }
-
-/* Input Form */
 
 .problem-form {
   display: flex;
@@ -336,8 +281,6 @@ textarea:focus {
   outline: 2px solid #bfdbfe;
 }
 
-/* Form Footer */
-
 .form-footer {
   display: flex;
   justify-content: space-between;
@@ -346,8 +289,6 @@ textarea:focus {
   color: #64748b;
   font-size: 12px;
 }
-
-/* Actions */
 
 .form-actions {
   display: flex;
@@ -388,8 +329,6 @@ button:disabled {
   background: #1d4ed8;
 }
 
-/* Status Messages */
-
 .form-hint,
 .notice {
   color: #64748b;
@@ -419,8 +358,6 @@ button:disabled {
   text-align: center;
 }
 
-/* Structured Result */
-
 .result-section {
   margin-top: 32px;
 }
@@ -439,8 +376,6 @@ button:disabled {
   color: #64748b;
   font-size: 13px;
 }
-
-/* Original Problem */
 
 .source-details {
   margin-top: 16px;
@@ -469,8 +404,6 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
-/* Responsive */
 
 @media (max-width: 600px) {
   .home {

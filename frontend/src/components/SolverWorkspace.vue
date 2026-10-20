@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
+import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
+
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
@@ -12,11 +14,14 @@ import {
   type TriggerDecision,
   type TriggerSuggestion,
 } from '@/services/analysis-trigger'
+
 import type { AnalysisResult } from '@/types/analysis'
+import type { StructuredProblem } from '@/types/problem'
 import type { ProgrammingLanguage } from '@/types/programming-language'
 
 const props = defineProps<{
   problemText: string
+  structuredProblem: StructuredProblem | null
 }>()
 
 const emit = defineEmits<{
@@ -54,12 +59,11 @@ const analysisResult = ref<AnalysisResult | null>(null)
 const errorMessage = ref('')
 
 // --------------------------------------------------
-// Automatic analysis and API usage control
+// Automatic analysis
 // --------------------------------------------------
 
 const MAX_AUTO_ANALYSES = 3
 
-// Automatic analysis is opt-in.
 const autoAnalysisEnabled = ref(false)
 const autoAnalysisCalls = ref(0)
 
@@ -74,7 +78,7 @@ const autoAnalysisLimitReached = computed(
 )
 
 // --------------------------------------------------
-// Stable code observation
+// Code observation
 // --------------------------------------------------
 
 type ObservationPhase = 'waiting' | 'editing' | 'settled'
@@ -112,13 +116,9 @@ const { isIdle, idleStatusText } = useIdleDetection(
 const { history, latestEntry } = useCodeHistory(stableSnapshot)
 
 // --------------------------------------------------
-// Automatic analysis trigger
+// Analysis trigger policy
 // --------------------------------------------------
 
-/**
- * Evaluate a stable snapshot and start automatic analysis
- * only when the user opted in and the request limit allows it.
- */
 function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
   const nowMs = Date.now()
 
@@ -130,23 +130,15 @@ function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
 
   triggerDecision.value = decision
 
-  // The policy can evaluate snapshots even in manual-only mode.
   if (!decision.eligible) {
     return
   }
 
-  // Never start automatic requests without explicit opt-in.
   if (!autoAnalysisEnabled.value) {
     return
   }
 
-  // Prevent overlapping manual and automatic analyses.
-  if (isAnalyzing.value) {
-    return
-  }
-
-  // Bound the number of automatic requests in this workspace.
-  if (autoAnalysisLimitReached.value) {
+  if (isAnalyzing.value || autoAnalysisLimitReached.value) {
     return
   }
 
@@ -163,14 +155,13 @@ function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
 // --------------------------------------------------
 
 watch([selectedLanguage, currentCode], () => {
-  // Each code or language change creates a new revision.
   codeRevision.value += 1
 
-  // Invalidate previous manual results.
+  // Invalidate previous manual analysis.
   analysisResult.value = null
   errorMessage.value = ''
 
-  // Cancel and invalidate previous automatic results.
+  // Cancel previous automatic analysis.
   autoAbortController?.abort()
   autoAbortController = null
 
@@ -178,7 +169,7 @@ watch([selectedLanguage, currentCode], () => {
   autoAnalysisResult.value = null
   autoAnalysisError.value = ''
 
-  // Reset stable observation.
+  // Reset observation state.
   stableSnapshot.value = null
   triggerDecision.value = null
   observationPhase.value = 'editing'
@@ -194,7 +185,6 @@ watch([selectedLanguage, currentCode], () => {
     revision: codeRevision.value,
   }
 
-  // A stable snapshot is created after editing stops.
   observationTimer = setTimeout(() => {
     observationTimer = null
 
@@ -209,7 +199,6 @@ watch([selectedLanguage, currentCode], () => {
     stableSnapshot.value = snapshot
     observationPhase.value = 'settled'
 
-    // Record the policy decision and optionally run analysis.
     considerAutomaticAnalysis(snapshot)
   }, OBSERVATION_DELAY_MS)
 })
@@ -220,7 +209,6 @@ watch([selectedLanguage, currentCode], () => {
 
 watch(autoAnalysisEnabled, (enabled) => {
   if (!enabled) {
-    // Turning automatic analysis off cancels an active request.
     autoAbortController?.abort()
     autoAbortController = null
 
@@ -230,8 +218,6 @@ watch(autoAnalysisEnabled, (enabled) => {
     return
   }
 
-  // When the user enables automatic analysis,
-  // evaluate the latest stable snapshot immediately.
   const snapshot = stableSnapshot.value
 
   if (
@@ -266,12 +252,12 @@ async function runAnalysis() {
     const result = await analyzeCode({
       session_id: 'vue-dev-session',
       code_revision: revision,
+      // Always send the complete original problem.
       problem_text: props.problemText,
       current_code: codeSnapshot,
       language: languageSnapshot,
     })
 
-    // The editor may have changed while awaiting the response.
     if (
       revision !== codeRevision.value ||
       codeSnapshot !== currentCode.value ||
@@ -283,7 +269,9 @@ async function runAnalysis() {
     }
 
     if (result.analyzed_revision !== revision) {
-      throw new Error('분석 결과의 코드 Revision이 일치하지 않습니다.')
+      throw new Error(
+        '분석 결과의 코드 Revision이 일치하지 않습니다.',
+      )
     }
 
     analysisResult.value = result
@@ -310,14 +298,12 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
     return
   }
 
-  // Cancel a superseded automatic request.
   autoAbortController?.abort()
 
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Count attempts before sending the HTTP request.
-  // Failed or cancelled attempts also count toward this limit.
+  // Count attempts, including failed or cancelled requests.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -329,6 +315,7 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       {
         session_id: 'vue-dev-session',
         code_revision: snapshot.revision,
+        // The original statement is preserved for the LLM.
         problem_text: props.problemText,
         current_code: snapshot.code,
         language: snapshot.language,
@@ -336,7 +323,6 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       controller.signal,
     )
 
-    // Ignore cancelled or superseded requests.
     if (
       controller.signal.aborted ||
       autoAbortController !== controller ||
@@ -345,7 +331,6 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       return
     }
 
-    // Never apply an analysis to a different code revision.
     if (
       snapshot.revision !== codeRevision.value ||
       snapshot.language !== selectedLanguage.value ||
@@ -360,7 +345,6 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       )
     }
 
-    // The intervention panel will decide whether to speak.
     autoAnalysisResult.value = result
   } catch (error) {
     if (
@@ -370,7 +354,6 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       return
     }
 
-    // Failed requests do not consume the trigger cooldown.
     if (lastSuggestion.value?.snapshot === snapshot) {
       lastSuggestion.value = null
     }
@@ -388,7 +371,7 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
 }
 
 // --------------------------------------------------
-// Cleanup
+// Cleanup and navigation
 // --------------------------------------------------
 
 onBeforeUnmount(() => {
@@ -401,10 +384,6 @@ onBeforeUnmount(() => {
   autoAbortController = null
 })
 
-// --------------------------------------------------
-// Navigation
-// --------------------------------------------------
-
 function returnToProblemInput() {
   emit('back')
 }
@@ -412,7 +391,6 @@ function returnToProblemInput() {
 
 <template>
   <div class="workspace">
-    <!-- Header -->
     <header class="workspace-header">
       <div class="brand">
         <h1>AlgoCoach</h1>
@@ -429,18 +407,19 @@ function returnToProblemInput() {
     </header>
 
     <div class="workspace-grid">
-      <!-- Problem -->
+      <!-- Problem Panel -->
       <section class="panel problem-panel">
         <div class="panel-header">
           <h2>문제</h2>
         </div>
 
-        <div class="problem-content">
-          {{ problemText }}
-        </div>
+        <ProblemReadingPanel
+          :original-text="problemText"
+          :structured-problem="structuredProblem"
+        />
       </section>
 
-      <!-- Editor -->
+      <!-- Code Editor Panel -->
       <section class="panel editor-panel">
         <div class="panel-header">
           <h2>코드 에디터</h2>
@@ -479,7 +458,7 @@ function returnToProblemInput() {
         </div>
       </section>
 
-      <!-- AI Coach -->
+      <!-- AI Coach Panel -->
       <aside class="panel coach-panel">
         <div class="panel-header">
           <h2>AI Coach</h2>
@@ -487,7 +466,7 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
-          <!-- Auto Analysis Control -->
+          <!-- Automatic Analysis Control -->
           <section class="control-card">
             <div class="control-heading">
               <h3>자동 AI 분석</h3>
@@ -497,7 +476,9 @@ function returnToProblemInput() {
                   v-model="autoAnalysisEnabled"
                   type="checkbox"
                 />
-                <span>{{ autoAnalysisEnabled ? 'ON' : 'OFF' }}</span>
+                <span>
+                  {{ autoAnalysisEnabled ? 'ON' : 'OFF' }}
+                </span>
               </label>
             </div>
 
@@ -562,8 +543,8 @@ function returnToProblemInput() {
             </div>
 
             <p class="observation-description">
-              분석 후보로 선정되어도 자동 분석이 OFF이거나
-              요청 한도에 도달한 경우에는 호출하지 않습니다.
+              분석 후보라도 자동 분석이 OFF이거나
+              요청 한도에 도달하면 호출하지 않습니다.
             </p>
 
             <p class="observation-description">
@@ -571,7 +552,10 @@ function returnToProblemInput() {
               (최근 최대 20개)
             </p>
 
-            <p v-if="latestEntry" class="observation-description">
+            <p
+              v-if="latestEntry"
+              class="observation-description"
+            >
               최근 기록:
               Revision {{ latestEntry.revision }}
               · {{ latestEntry.language }}
@@ -649,7 +633,9 @@ function returnToProblemInput() {
               <dd>{{ analysisResult.algorithm ?? '미판단' }}</dd>
 
               <dt>복잡도</dt>
-              <dd>{{ analysisResult.complexity_estimate ?? '미판단' }}</dd>
+              <dd>
+                {{ analysisResult.complexity_estimate ?? '미판단' }}
+              </dd>
             </dl>
 
             <p>{{ analysisResult.summary }}</p>
@@ -661,7 +647,10 @@ function returnToProblemInput() {
               {{ analysisResult.positive_observation }}
             </p>
 
-            <div v-if="analysisResult.issues.length > 0" class="issue-list">
+            <div
+              v-if="analysisResult.issues.length > 0"
+              class="issue-list"
+            >
               <h3>검토할 문제</h3>
 
               <ul>
@@ -671,6 +660,7 @@ function returnToProblemInput() {
                 >
                   <strong>{{ issue.severity }}</strong>
                   · {{ issue.description }}
+
                   <p>{{ issue.evidence }}</p>
                 </li>
               </ul>
@@ -698,8 +688,6 @@ function returnToProblemInput() {
 </template>
 
 <style scoped>
-/* Workspace */
-
 .workspace {
   min-height: 100vh;
   padding: 20px;
@@ -740,8 +728,6 @@ function returnToProblemInput() {
   cursor: pointer;
 }
 
-/* Layout */
-
 .workspace-grid {
   display: grid;
   grid-template-columns:
@@ -778,18 +764,6 @@ function returnToProblemInput() {
   font-size: 15px;
 }
 
-/* Problem */
-
-.problem-content {
-  padding: 20px;
-  font-size: 14px;
-  line-height: 1.8;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-/* Editor */
-
 .editor-content {
   display: flex;
   flex: 1;
@@ -820,8 +794,6 @@ function returnToProblemInput() {
   font-size: 13px;
   cursor: pointer;
 }
-
-/* AI Coach */
 
 .coach-content {
   display: flex;
@@ -863,12 +835,10 @@ function returnToProblemInput() {
   line-height: 1.7;
 }
 
-/* Automatic Analysis Control */
-
 .control-heading {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -909,8 +879,6 @@ function returnToProblemInput() {
   font-weight: 600;
 }
 
-/* Observation */
-
 .snapshot-info {
   margin-top: 10px !important;
   color: #2563eb;
@@ -932,8 +900,6 @@ function returnToProblemInput() {
   margin-top: 6px !important;
   color: #64748b;
 }
-
-/* Manual Analysis */
 
 .analyze-button {
   width: 100%;
@@ -1005,8 +971,6 @@ function returnToProblemInput() {
   text-align: center;
 }
 
-/* Accessibility */
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1015,8 +979,6 @@ function returnToProblemInput() {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
-
-/* Responsive */
 
 @media (max-width: 1050px) {
   .workspace-grid {
