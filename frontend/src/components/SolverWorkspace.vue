@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-
 import { analyzeCode } from '@/services/analysis'
 import type { AnalysisResult } from '@/types/analysis'
 
-import PythonCodeEditor from '@/components/PythonCodeEditor.vue'
+import { computed, reactive, ref, watch } from 'vue'
+
+import CodeEditor from '@/components/CodeEditor.vue'
+import type { ProgrammingLanguage } from '@/types/programming-language'
 
 const props = defineProps<{
   problemText: string
@@ -14,14 +15,29 @@ const emit = defineEmits<{
   back: []
 }>()
 
-const currentCode = ref('')
+const selectedLanguage = ref<ProgrammingLanguage>('python')
+
+const codeByLanguage = reactive<Record<ProgrammingLanguage, string>>({
+  python: '',
+  java: '',
+  cpp: '',
+  c: '',
+})
+
+const currentCode = computed({
+  get: () => codeByLanguage[selectedLanguage.value],
+  set: (value: string) => {
+    codeByLanguage[selectedLanguage.value] = value
+  },
+})
+
 const codeRevision = ref(0)
 
 const isAnalyzing = ref(false)
 const analysisResult = ref<AnalysisResult | null>(null)
 const errorMessage = ref('')
 
-watch(currentCode, () => {
+watch([selectedLanguage, currentCode], () => {
   codeRevision.value += 1
   analysisResult.value = null
   errorMessage.value = ''
@@ -105,15 +121,38 @@ function returnToProblemInput() {
       <!-- Code Editor Panel -->
       <section class="panel editor-panel">
         <div class="panel-header">
-          <h2>Python 코드</h2>
-          <span class="revision">Revision {{ codeRevision }}</span>
+          <h2>코드 에디터</h2>
+
+          <div class="editor-controls">
+            <label for="language-select" class="sr-only">
+              프로그래밍 언어
+            </label>
+
+            <select
+              id="language-select"
+              v-model="selectedLanguage"
+              class="language-select"
+            >
+              <option value="python">Python</option>
+              <option value="java">Java</option>
+              <option value="cpp">C++</option>
+              <option value="c">C</option>
+            </select>
+
+            <span class="revision">
+              Revision {{ codeRevision }}
+            </span>
+          </div>
         </div>
 
         <div class="editor-content">
-          <PythonCodeEditor v-model="currentCode" />
+          <CodeEditor
+            v-model="currentCode"
+            :language="selectedLanguage"
+          />
 
           <div class="editor-footer">
-            <span>Python · 4 Spaces · Monaco Editor</span>
+            <span>Monaco Editor · 4 Spaces · Mock Analysis</span>
           </div>
         </div>
       </section>
@@ -399,5 +438,22 @@ function returnToProblemInput() {
   .code-input {
     min-height: 350px;
   }
+}
+
+.editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.language-select {
+  padding: 7px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: white;
+  color: #334155;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }
 </style>
