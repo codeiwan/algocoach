@@ -156,16 +156,13 @@ watch([selectedLanguage, currentCode], () => {
     observationPhase.value = 'settled'
 
     // 8. Record eligible analysis candidates.
-    if (decision.eligible) {
+    if (decision.eligible && !isAnalyzing.value) {
       lastSuggestion.value = {
         snapshot,
         suggestedAtMs: nowMs,
       }
 
-      // Automatic analysis is skipped while manual analysis is running.
-      if (!isAnalyzing.value) {
-        void runAutomaticAnalysis(snapshot)
-      }
+      void runAutomaticAnalysis(snapshot)
     }
   }, OBSERVATION_DELAY_MS)
 })
@@ -283,12 +280,18 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
     // Do not publish proactive coaching messages yet.
     autoAnalysisResult.value = result
   } catch (error) {
-    // Cancellation is expected when the user edits the code.
+    // Ignore cancelled or superseded requests.
     if (
       controller.signal.aborted ||
       autoAbortController !== controller
     ) {
       return
+    }
+
+    // A failed request must not consume the trigger cooldown.
+    // Only clear the record belonging to this exact snapshot.
+    if (lastSuggestion.value?.snapshot === snapshot) {
+      lastSuggestion.value = null
     }
 
     autoAnalysisError.value =
