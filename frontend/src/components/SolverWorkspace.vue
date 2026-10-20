@@ -12,6 +12,7 @@ import {
 } from '@/services/analysis-trigger'
 import type { AnalysisResult } from '@/types/analysis'
 import type { ProgrammingLanguage } from '@/types/programming-language'
+import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 
 const props = defineProps<{
   problemText: string
@@ -465,10 +466,16 @@ function returnToProblemInput() {
             </p>
 
             <p class="observation-description">
-              자동 분석 결과는 내부 상태에 저장되며,
-              사용자에게 코칭 메시지로 공개하지 않습니다.
+              분석 결과를 개입 정책에 전달합니다.
+              코칭할 근거가 부족하면 메시지를 표시하지 않습니다.
             </p>
           </div>
+          
+          <!-- Proactive Coaching Feed -->
+          <CoachInterventionPanel
+            :analysis-result="autoAnalysisResult"
+            :current-revision="codeRevision"
+          />
 
           <!-- Manual Analysis Button -->
           <button
