@@ -15,7 +15,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Initialize and clean up shared application resources."""
 
     settings = Settings()
-    provider = create_llm_provider(settings.llm_provider)
+
+    api_key = (
+        settings.openai_api_key.get_secret_value()
+        if settings.openai_api_key is not None
+        else None
+    )
+
+    provider = create_llm_provider(
+        settings.llm_provider,
+        api_key=api_key,
+        model=settings.openai_model,
+    )
 
     # Shared resources are initialized once at application startup.
     app.state.llm_provider = provider

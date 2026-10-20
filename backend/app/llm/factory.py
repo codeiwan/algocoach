@@ -1,11 +1,15 @@
 from typing import Literal
 
 from app.llm.mock import MockLLMProvider
+from app.llm.openai_provider import OpenAILLMProvider
 from app.llm.provider import LLMProvider
 
 
 def create_llm_provider(
     provider_name: Literal["mock", "openai"],
+    *,
+    api_key: str | None = None,
+    model: str = "gpt-5.4-mini",
 ) -> LLMProvider:
     """Create the configured LLM provider."""
 
@@ -13,9 +17,16 @@ def create_llm_provider(
         return MockLLMProvider()
 
     if provider_name == "openai":
-        raise NotImplementedError(
-            "OpenAI Provider is not implemented yet. "
-            "Use LLM_PROVIDER=mock for now."
+        if not api_key:
+            raise ValueError(
+                "OPENAI_API_KEY is required for the OpenAI provider."
+            )
+
+        return OpenAILLMProvider(
+            api_key=api_key,
+            model=model,
         )
 
-    raise ValueError(f"Unsupported LLM provider: {provider_name}")
+    raise ValueError(
+        f"Unsupported LLM provider: {provider_name}"
+    )
