@@ -1,8 +1,9 @@
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 
 import {
+  INTERVENTION_COOLDOWN_MS,
   evaluateIntervention,
   type DeliveredIntervention,
   type InterventionCandidate,
@@ -36,6 +37,79 @@ const lastDemoReason = ref<InterventionReason | null>(null)
 
 let nextMessageId = 0
 
+// --------------------------------------------------
+// Pending interventions
+// --------------------------------------------------
+
+// Automatic and simulated coaching have separate pending states.
+const pendingAutoResult = shallowRef<AnalysisResult | null>(null)
+const pendingDemoResult = shallowRef<AnalysisResult | null>(null)
+
+const pendingTimers: Record<
+  FeedbackSource,
+  ReturnType<typeof setTimeout> | null
+> = {
+  auto: null,
+  simulation: null,
+}
+
+function getPendingSlot(source: FeedbackSource) {
+  return source === 'auto'
+    ? pendingAutoResult
+    : pendingDemoResult
+}
+
+/**
+ * Cancel a scheduled intervention and discard its candidate.
+ */
+function clearPending(source: FeedbackSource) {
+  const timer = pendingTimers[source]
+
+  if (timer !== null) {
+    clearTimeout(timer)
+  }
+
+  pendingTimers[source] = null
+  getPendingSlot(source).value = null
+}
+
+/**
+ * Re-evaluate a postponed analysis when its cooldown expires.
+ */
+function schedulePending(
+  result: AnalysisResult,
+  source: FeedbackSource,
+  remainingMs: number,
+) {
+  const pendingSlot = getPendingSlot(source)
+
+  pendingSlot.value = result
+
+  pendingTimers[source] = setTimeout(() => {
+    pendingTimers[source] = null
+
+    // Another result may have replaced this candidate.
+    if (pendingSlot.value !== result) {
+      return
+    }
+
+    pendingSlot.value = null
+
+    // The code must still be at the same revision.
+    if (result.analyzed_revision !== props.currentRevision) {
+      return
+    }
+
+    // Real automatic analysis must still be the latest result.
+    if (source === 'auto' && props.analysisResult !== result) {
+      return
+    }
+
+    // Re-evaluate the policy instead of delivering unconditionally.
+    processAnalysis(result, source)
+  }, remainingMs)
+}
+
 const reasonLabels: Record<InterventionReason, string> = {
   STALE_REVISION: '오래된 코드 분석 결과이므로 개입하지 않습니다.',
   NO_SIGNAL: '코칭할 만한 구체적인 근거가 없어 관찰을 유지합니다.',
@@ -52,6 +126,9 @@ function processAnalysis(
   result: AnalysisResult,
   source: FeedbackSource,
 ) {
+  // A newer evaluation replaces any previous pending candidate.
+  clearPending(source)
+
   const nowMs = Date.now()
 
   const lastDelivered =
@@ -72,14 +149,29 @@ function processAnalysis(
     lastDemoReason.value = decision.reason
   }
 
-  // A rejected decision must not change delivery history.
+  // Handle decisions that should not be delivered immediately.
   if (!decision.eligible || !decision.candidate) {
+    // A cooldown-blocked candidate may be worth reconsidering later.
+    if (
+      decision.reason === 'COOLDOWN' &&
+      lastDelivered !== null
+    ) {
+      const elapsedMs = nowMs - lastDelivered.deliveredAtMs
+
+      const remainingMs = Math.max(
+        1,
+        INTERVENTION_COOLDOWN_MS - elapsedMs,
+      )
+
+      schedulePending(result, source, remainingMs)
+    }
+
     return
   }
 
   const candidate = decision.candidate
 
-  // Record the intervention at the moment it is added to the feed.
+  // Record only messages that actually enter the coaching feed.
   const delivered: DeliveredIntervention = {
     fingerprint: candidate.fingerprint,
     deliveredAtMs: nowMs,
@@ -106,9 +198,21 @@ function processAnalysis(
 watch(
   () => props.analysisResult,
   (result) => {
+    // A new analysis result replaces the previous pending candidate.
+    clearPending('auto')
+
     if (result !== null) {
       processAnalysis(result, 'auto')
     }
+  },
+)
+
+// Any code revision change invalidates postponed interventions.
+watch(
+  () => props.currentRevision,
+  () => {
+    clearPending('auto')
+    clearPending('simulation')
   },
 )
 
@@ -183,14 +287,22 @@ function simulateScenario(scenario: DemoScenario) {
 }
 
 function resetSimulation() {
+  // Cancel any simulated message waiting for cooldown.
+  clearPending('simulation')
+
   lastDemoDelivered.value = null
   lastDemoReason.value = null
 
-  // Preserve real automatic coaching messages and their history.
+  // Preserve real automatic coaching messages.
   messages.value = messages.value.filter(
     (message) => message.source !== 'simulation',
   )
 }
+
+onBeforeUnmount(() => {
+  clearPending('auto')
+  clearPending('simulation')
+})
 </script>
 
 <template>
@@ -202,12 +314,18 @@ function resetSimulation() {
 
     <div class="policy-status">
       <strong>최근 자동 분석 판단</strong>
+
       <p>
         {{
           lastAutoReason
             ? reasonLabels[lastAutoReason]
             : '아직 자동 분석에 대한 개입 판단이 없습니다.'
         }}
+      </p>
+
+      <p v-if="pendingAutoResult" class="pending-note">
+        코칭 후보가 Cooldown 종료를 기다리고 있습니다.
+        현재 코드가 유지되면 자동으로 재평가합니다.
       </p>
     </div>
 
@@ -289,9 +407,9 @@ function resetSimulation() {
         </button>
       </div>
 
-      <p v-if="lastDemoReason" class="demo-result">
-        최근 테스트 판단:
-        <strong>{{ lastDemoReason }}</strong>
+      <p v-if="pendingDemoResult" class="pending-note">
+        테스트 코칭 후보 대기 중입니다.
+        Cooldown 종료 시 다시 판단합니다.
       </p>
     </details>
   </section>
@@ -454,5 +572,12 @@ function resetSimulation() {
   margin: 12px 0 0;
   color: #475569;
   font-size: 12px;
+}
+
+.pending-note {
+  margin-top: 10px !important;
+  color: #9a3412 !important;
+  font-size: 12px;
+  line-height: 1.6;
 }
 </style>
