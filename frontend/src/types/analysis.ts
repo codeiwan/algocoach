@@ -1,3 +1,5 @@
+import type { ProgrammingLanguage } from './programming-language'
+
 export type ProgressStatus =
   | 'UNDERSTANDING'
   | 'IMPLEMENTING'
@@ -13,6 +15,7 @@ export interface AnalysisRequest {
   problem_text: string
   current_code: string
   previous_code?: string | null
+  language: ProgrammingLanguage
 }
 
 export interface CodeIssue {

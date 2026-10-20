@@ -48,8 +48,10 @@ async function runAnalysis() {
     return
   }
 
+  // 분석 요청 시점의 상태를 고정합니다.
   const revision = codeRevision.value
   const codeSnapshot = currentCode.value
+  const languageSnapshot = selectedLanguage.value
 
   isAnalyzing.value = true
   analysisResult.value = null
@@ -61,11 +63,17 @@ async function runAnalysis() {
       code_revision: revision,
       problem_text: props.problemText,
       current_code: codeSnapshot,
+      language: languageSnapshot,
     })
 
-    if (revision !== codeRevision.value) {
+    // 응답을 기다리는 동안 코드나 언어가 변경되었는지 확인합니다.
+    if (
+      revision !== codeRevision.value ||
+      codeSnapshot !== currentCode.value ||
+      languageSnapshot !== selectedLanguage.value
+    ) {
       errorMessage.value =
-        '분석 중 코드가 변경되었습니다. 다시 분석해 주세요.'
+        '분석 중 코드 또는 언어가 변경되었습니다. 다시 분석해 주세요.'
       return
     }
 
@@ -94,7 +102,7 @@ function returnToProblemInput() {
     <header class="workspace-header">
       <div class="brand">
         <h1>AlgoCoach</h1>
-        <span>Python 풀이 환경</span>
+        <span>코딩테스트 풀이 환경</span>
       </div>
 
       <button

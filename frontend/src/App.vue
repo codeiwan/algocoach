@@ -42,7 +42,7 @@ function returnToHome() {
         />
 
         <div class="form-footer">
-          <span>현재 지원 언어: Python</span>
+          <span>지원 언어: Python · Java · C++ · C</span>
 
           <button type="submit" :disabled="!problemText.trim()">
             풀이 시작 →

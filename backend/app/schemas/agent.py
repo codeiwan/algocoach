@@ -4,6 +4,15 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class ProgrammingLanguage(StrEnum):
+    """Supported programming languages."""
+
+    PYTHON = "python"
+    JAVA = "java"
+    CPP = "cpp"
+    C = "c"
+
+
 class ProgressStatus(StrEnum):
     """Current stage of the user's problem-solving process."""
 
@@ -33,6 +42,8 @@ class AnalysisRequest(BaseModel):
     problem_text: str = Field(min_length=1)
     current_code: str
     previous_code: str | None = None
+
+    language: ProgrammingLanguage = ProgrammingLanguage.PYTHON
 
 
 class CodeIssue(BaseModel):
