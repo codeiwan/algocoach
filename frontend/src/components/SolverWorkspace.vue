@@ -2,7 +2,7 @@
 import { analyzeCode } from '@/services/analysis'
 import type { AnalysisResult } from '@/types/analysis'
 
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import type { ProgrammingLanguage } from '@/types/programming-language'
@@ -37,10 +37,70 @@ const isAnalyzing = ref(false)
 const analysisResult = ref<AnalysisResult | null>(null)
 const errorMessage = ref('')
 
+type ObservationPhase = 'waiting' | 'editing' | 'settled'
+
+interface CodeSnapshot {
+  language: ProgrammingLanguage
+  code: string
+  revision: number
+}
+
+const OBSERVATION_DELAY_MS = 800
+
+const observationPhase = ref<ObservationPhase>('waiting')
+const stableSnapshot = ref<CodeSnapshot | null>(null)
+
+let observationTimer: ReturnType<typeof setTimeout> | null = null
+
+const observationStatusText = computed(() => {
+  switch (observationPhase.value) {
+    case 'editing':
+      return '코드 편집 중'
+    case 'settled':
+      return '입력 안정'
+    default:
+      return '입력 대기'
+  }
+})
+
 watch([selectedLanguage, currentCode], () => {
+  // 1. 변경사항을 즉시 반영합니다.
   codeRevision.value += 1
   analysisResult.value = null
   errorMessage.value = ''
+
+  // 이전 안정 스냅샷은 더 이상 최신 상태가 아닙니다.
+  stableSnapshot.value = null
+  observationPhase.value = 'editing'
+
+  // 2. 이전 대기 타이머를 취소합니다.
+  if (observationTimer !== null) {
+    clearTimeout(observationTimer)
+  }
+
+  // 3. 현재 코드 상태를 복사합니다.
+  const snapshot: CodeSnapshot = {
+    language: selectedLanguage.value,
+    code: currentCode.value,
+    revision: codeRevision.value,
+  }
+
+  // 4. 마지막 변경 이후 800ms가 지나면 안정 상태로 전환합니다.
+  observationTimer = setTimeout(() => {
+    observationTimer = null
+
+    // 대기 중 코드나 언어가 바뀌었다면 폐기합니다.
+    if (
+      snapshot.revision !== codeRevision.value ||
+      snapshot.language !== selectedLanguage.value ||
+      snapshot.code !== currentCode.value
+    ) {
+      return
+    }
+
+    stableSnapshot.value = snapshot
+    observationPhase.value = 'settled'
+  }, OBSERVATION_DELAY_MS)
 })
 
 async function runAnalysis() {
@@ -91,6 +151,13 @@ async function runAnalysis() {
     isAnalyzing.value = false
   }
 }
+
+onBeforeUnmount(() => {
+  if (observationTimer !== null) {
+    clearTimeout(observationTimer)
+    observationTimer = null
+  }
+})
 
 function returnToProblemInput() {
   emit('back')
@@ -174,10 +241,23 @@ function returnToProblemInput() {
 
         <div class="coach-content">
           <div class="observation-card">
-            <h3>관찰 상태</h3>
+            <h3>코드 관찰 상태</h3>
+
             <p>
-              현재는 수동 분석 테스트 모드입니다.
-              자동 관찰과 자율 개입 기능은 아직 연결되지 않았습니다.
+              현재 상태:
+              <strong>{{ observationStatusText }}</strong>
+            </p>
+
+            <p v-if="stableSnapshot" class="snapshot-info">
+              안정된 스냅샷:
+              Revision {{ stableSnapshot.revision }}
+              · {{ stableSnapshot.language }}
+            </p>
+
+            <p class="observation-description">
+              코드 변경 후 0.8초 동안 추가 입력이 없으면
+              안정된 스냅샷을 생성합니다.
+              AI 분석은 아직 수동으로 실행됩니다.
             </p>
           </div>
 
@@ -463,5 +543,16 @@ function returnToProblemInput() {
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+}
+
+.snapshot-info {
+  margin-top: 10px !important;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.observation-description {
+  margin-top: 12px !important;
+  color: #64748b;
 }
 </style>
