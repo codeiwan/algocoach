@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import { analyzeCode } from '@/services/analysis'
+import { useIdleDetection } from '@/composables/useIdleDetection'
 import {
   evaluateAnalysisTrigger,
   type CodeSnapshot,
@@ -43,6 +44,11 @@ const currentCode = computed({
 })
 
 const codeRevision = ref(0)
+
+const { isIdle, idleStatusText } = useIdleDetection(
+  currentCode,
+  selectedLanguage,
+)
 
 // --------------------------------------------------
 // Manual analysis state
@@ -422,6 +428,16 @@ function returnToProblemInput() {
               안정된 스냅샷:
               Revision {{ stableSnapshot.revision }}
               · {{ stableSnapshot.language }}
+            </p>
+
+            <p class="observation-description">
+              편집 활동:
+              <strong>{{ idleStatusText }}</strong>
+            </p>
+
+            <p v-if="isIdle" class="observation-description">
+              최근 30초 동안 코드 수정이 감지되지 않았습니다.
+              다만 실제 풀이 정체 여부는 아직 판단하지 않습니다.
             </p>
 
             <div v-if="triggerDecision" class="trigger-decision">
