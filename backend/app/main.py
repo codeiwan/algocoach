@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 
 from app.agents.graph import create_analysis_graph
 from app.api.analysis import router as analysis_router
+from app.api.problems import router as problems_router
 from app.core.config import Settings
 from app.llm.factory import create_llm_provider
 from app.llm.provider import LLMProvider
@@ -28,7 +29,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=settings.openai_model,
     )
 
-    # Shared resources are initialized once at application startup.
     app.state.llm_provider = provider
     app.state.analysis_graph = create_analysis_graph(provider)
 
@@ -45,7 +45,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Register API routers.
 app.include_router(analysis_router)
+app.include_router(problems_router)
 
 
 @app.get("/api/v1/health")
@@ -57,7 +59,7 @@ async def health_check() -> dict[str, str]:
 
 @app.get("/api/v1/dev/mock")
 async def mock_provider_check(request: Request) -> dict[str, str]:
-    """Verify that the Mock LLM Provider is available."""
+    """Legacy endpoint for checking the provider's text response."""
 
     provider: LLMProvider = request.app.state.llm_provider
 

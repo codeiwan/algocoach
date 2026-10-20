@@ -3,6 +3,10 @@ from app.schemas.agent import (
     AnalysisResult,
     ProgressStatus,
 )
+from app.schemas.problem import (
+    ProblemStructureRequest,
+    StructuredProblem,
+)
 
 
 class MockLLMProvider:
@@ -13,7 +17,7 @@ class MockLLMProvider:
         return "Mock Provider 응답입니다. 실제 LLM은 호출하지 않았습니다."
 
     async def analyze(self, request: AnalysisRequest) -> AnalysisResult:
-        """Return a structured mock analysis for testing."""
+        """Return a structured mock code analysis."""
 
         if request.current_code.strip():
             progress_status = ProgressStatus.IMPLEMENTING
@@ -28,6 +32,22 @@ class MockLLMProvider:
             positive_observation=None,
             complexity_estimate=None,
             issues=[],
+        )
+
+    async def structure_problem(
+        self,
+        request: ProblemStructureRequest,
+    ) -> StructuredProblem:
+        """Preserve the original problem without AI extraction."""
+
+        return StructuredProblem(
+            title=None,
+            goal=request.problem_text.strip(),
+            input_format=None,
+            output_format=None,
+            constraints=[],
+            examples=[],
+            ambiguities=[],
         )
 
     async def aclose(self) -> None:

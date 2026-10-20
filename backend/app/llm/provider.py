@@ -1,6 +1,7 @@
 from typing import Protocol
 
 from app.schemas.agent import AnalysisRequest, AnalysisResult
+from app.schemas.problem import ProblemStructureRequest, StructuredProblem
 
 
 class LLMProvider(Protocol):
@@ -12,6 +13,13 @@ class LLMProvider(Protocol):
 
     async def analyze(self, request: AnalysisRequest) -> AnalysisResult:
         """Analyze a problem-solving snapshot."""
+        ...
+
+    async def structure_problem(
+        self,
+        request: ProblemStructureRequest,
+    ) -> StructuredProblem:
+        """Extract structured information from a coding problem."""
         ...
 
     async def aclose(self) -> None:
