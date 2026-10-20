@@ -3,10 +3,31 @@ from app.schemas.agent import (
     AnalysisResult,
     ProgressStatus,
 )
+from app.schemas.hint import (
+    HintLevel,
+    HintRequest,
+    HintResult,
+)
 from app.schemas.problem import (
     ProblemStructureRequest,
     StructuredProblem,
 )
+
+
+MOCK_HINT_MESSAGES: dict[HintLevel, str] = {
+    HintLevel.DIRECTION: (
+        "Mock 방향 힌트입니다. 문제의 입력 조건과 목표 출력을 "
+        "비교해 보세요."
+    ),
+    HintLevel.ALGORITHM: (
+        "Mock 알고리즘 힌트입니다. 입력 크기와 필요한 연산을 "
+        "기준으로 접근 방법을 검토하세요."
+    ),
+    HintLevel.IMPLEMENTATION: (
+        "Mock 구현 힌트입니다. 현재 코드에서 다음에 처리해야 할 "
+        "단계를 확인해 보세요."
+    ),
+}
 
 
 class MockLLMProvider:
@@ -14,6 +35,7 @@ class MockLLMProvider:
 
     async def generate(self, prompt: str) -> str:
         """Return a fixed text response."""
+
         return "Mock Provider 응답입니다. 실제 LLM은 호출하지 않았습니다."
 
     async def analyze(self, request: AnalysisRequest) -> AnalysisResult:
@@ -50,6 +72,17 @@ class MockLLMProvider:
             ambiguities=[],
         )
 
+    async def generate_hint(self, request: HintRequest) -> HintResult:
+        """Return a predefined hint for the requested level."""
+
+        return HintResult(
+            hinted_revision=request.code_revision,
+            level=request.level,
+            message=MOCK_HINT_MESSAGES[request.level],
+            code_reference=None,
+        )
+
     async def aclose(self) -> None:
         """No resources need to be released by the mock provider."""
+
         pass
