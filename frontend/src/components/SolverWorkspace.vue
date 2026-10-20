@@ -14,6 +14,7 @@ import {
 import type { AnalysisResult } from '@/types/analysis'
 import type { ProgrammingLanguage } from '@/types/programming-language'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
+import { useCodeHistory } from '@/composables/useCodeHistory'
 
 const props = defineProps<{
   problemText: string
@@ -78,6 +79,7 @@ const OBSERVATION_DELAY_MS = 800
 
 const observationPhase = ref<ObservationPhase>('waiting')
 const stableSnapshot = ref<CodeSnapshot | null>(null)
+const { history, latestEntry } = useCodeHistory(stableSnapshot)  
 
 const triggerDecision = ref<TriggerDecision | null>(null)
 const lastSuggestion = ref<TriggerSuggestion | null>(null)
@@ -428,6 +430,23 @@ function returnToProblemInput() {
               안정된 스냅샷:
               Revision {{ stableSnapshot.revision }}
               · {{ stableSnapshot.language }}
+            </p>
+
+            <p class="observation-description">
+              기록된 코드 변경: {{ history.length }}개
+              (최근 최대 20개)
+            </p>
+
+            <p v-if="latestEntry" class="observation-description">
+              최근 기록:
+              Revision {{ latestEntry.revision }}
+              · {{ latestEntry.language }}
+              ·
+              {{
+                latestEntry.changedCharacters === null
+                  ? '첫 코드 기록'
+                  : `약 ${latestEntry.changedCharacters}자 변경`
+              }}
             </p>
 
             <p class="observation-description">
