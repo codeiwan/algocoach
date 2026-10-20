@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
+from app.agents.graph import create_analysis_graph
+from app.api.analysis import router as analysis_router
 from app.core.config import Settings
 from app.llm.factory import create_llm_provider
 from app.llm.provider import LLMProvider
@@ -15,7 +17,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     provider = create_llm_provider(settings.llm_provider)
 
+    # Shared resources are initialized once at application startup.
     app.state.llm_provider = provider
+    app.state.analysis_graph = create_analysis_graph(provider)
 
     try:
         yield
@@ -29,6 +33,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(analysis_router)
 
 
 @app.get("/api/v1/health")
