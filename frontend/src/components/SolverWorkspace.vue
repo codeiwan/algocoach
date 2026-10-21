@@ -9,6 +9,7 @@ import {
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
+import CoachAgentToolbar from '@/components/CoachAgentToolbar.vue'
 import CoachQuestionPanel from '@/components/CoachQuestionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
@@ -1105,6 +1106,22 @@ function returnToProblemInput() {
             Forward real editor and API activity
             to the agent status display.
           -->
+          <CoachAgentToolbar
+            v-model:auto-enabled="autoAnalysisEnabled"
+            :auto-analysis-calls="autoAnalysisCalls"
+            :max-auto-analyses="MAX_AUTO_ANALYSES"
+            :current-revision="codeRevision"
+            :observation-phase="observationPhase"
+            :is-auto-analyzing="isAutoAnalyzing"
+            :is-manual-analyzing="isAnalyzing"
+            :is-question-answering="isQuestionAnswering"
+            :auto-analysis-result="autoAnalysisResult"
+            :manual-analysis-result="analysisResult"
+            :auto-analysis-error="autoAnalysisError"
+            :manual-analysis-error="errorMessage"
+            :issue-recovery="issueRecovery"
+          />
+
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :manual-analysis-result="analysisResult"
@@ -1122,34 +1139,6 @@ function returnToProblemInput() {
           />
 
           <div class="coach-action-dock">
-            <div class="auto-control-row">
-              <label class="auto-control-label">
-                <input
-                  v-model="autoAnalysisEnabled"
-                  type="checkbox"
-                  class="auto-checkbox"
-                />
-
-                <span>자동 AI 코칭</span>
-
-                <strong>
-                  {{ autoAnalysisEnabled ? 'ON' : 'OFF' }}
-                </strong>
-              </label>
-
-              <span class="auto-usage">
-                {{ autoAnalysisCalls }}/{{ MAX_AUTO_ANALYSES }}
-              </span>
-            </div>
-
-            <p
-              v-if="autoAnalysisLimitReached"
-              class="auto-limit-notice"
-            >
-              자동 분석 한도에 도달했습니다.
-              수동 피드백과 질문은 계속 사용할 수 있습니다.
-            </p>
-
             <button
               type="button"
               class="analyze-button"

@@ -404,3 +404,21 @@
     padding-top: 8px;
   }
 }
+
+/* Stage 5.10D - integrated agent toolbar */
+#app .coach-panel .coach-content > .coach-agent-toolbar {
+  order: -1;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Old title and status are replaced by the new toolbar. */
+#app .coach-panel .coach-feedback > .agent-header,
+#app .coach-panel .coach-feedback > .agent-status {
+  display: none;
+}
+
+#app .coach-panel .coach-content > .coach-feedback {
+  gap: 0;
+  min-height: 0;
+}
