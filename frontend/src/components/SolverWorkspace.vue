@@ -12,6 +12,7 @@ import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
 import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
+import SessionFeedbackPanel from '@/components/SessionFeedbackPanel.vue'
 import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
@@ -364,7 +365,7 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
-  // This is a development-only request limit.
+  // Development-only automatic analysis request limit.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -447,7 +448,6 @@ function handleSessionCompleted(
     return
   }
 
-  // Stop new automatic analyses after completing the session.
   autoAnalysisEnabled.value = false
 
   autoAbortController?.abort()
@@ -586,6 +586,13 @@ function returnToProblemInput() {
         이번 풀이에는 외부 채점 결과가 기록되지 않았습니다.
       </div>
 
+      <!-- New: optional post-session learning feedback -->
+      <div class="feedback-container">
+        <SessionFeedbackPanel
+          :session-id="completionOutcome.receipt.session_id"
+        />
+      </div>
+
       <section
         v-if="completionOutcome.request.notes"
         class="completion-section"
@@ -603,7 +610,7 @@ function returnToProblemInput() {
       </section>
 
       <p class="completion-limitation">
-        현재 개발 버전에서는 완료 기록을 서버 메모리에 보관합니다.
+        현재 개발 버전에서는 완료 기록과 설문을 서버 메모리에 보관합니다.
         서버가 재시작되면 저장된 기록이 사라질 수 있습니다.
       </p>
 
@@ -1365,6 +1372,10 @@ function returnToProblemInput() {
   color: #1e40af;
   font-size: 12px;
   line-height: 1.8;
+}
+
+.feedback-container {
+  margin-top: 24px;
 }
 
 .completion-section {
