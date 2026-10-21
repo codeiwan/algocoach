@@ -9,6 +9,7 @@ import {
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
+import CoachQuestionPanel from '@/components/CoachQuestionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
 import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
@@ -177,6 +178,7 @@ const issueRecovery = ref<IssueRecoveryNotice | null>(null)
 
 function editedReportedIssue(snapshot: CodeSnapshot): boolean {
   const previous = lastReportedIssues.value
+
   return (
     previous !== null &&
     previous.snapshot.language === snapshot.language &&
@@ -200,7 +202,6 @@ function observeIssueEdit(snapshot: CodeSnapshot) {
     return
   }
 
-  // Do not keep displaying successful verification after new edits.
   issueRecovery.value = null
 }
 
@@ -250,7 +251,6 @@ function acceptFreshAnalysis(
     }
   }
 
-  // A later edit will be compared with the newest issue-bearing code.
   lastReportedIssues.value = result.issues.length > 0
     ? { snapshot, issues: result.issues }
     : null
@@ -403,9 +403,11 @@ watch(autoAnalysisEnabled, (enabled) => {
     autoAnalysisResult.value = null
     autoAnalysisError.value = ''
 
-    // Aborting a recheck cannot establish that the error is resolved.
     if (issueRecovery.value?.phase === 'checking') {
-      issueRecovery.value = { ...issueRecovery.value, phase: 'pending' }
+      issueRecovery.value = {
+        ...issueRecovery.value,
+        phase: 'pending',
+      }
     }
     return
   }
@@ -443,6 +445,7 @@ async function runAnalysis() {
   const revision = codeRevision.value
   const codeSnapshot = currentCode.value
   const languageSnapshot = selectedLanguage.value
+
   const snapshot: CodeSnapshot = {
     language: languageSnapshot,
     code: codeSnapshot,
@@ -487,6 +490,7 @@ async function runAnalysis() {
     analysisResult.value = result
   } catch (error) {
     markIssueCheckFailure(snapshot)
+
     if (completionOutcome.value !== null) {
       return
     }
@@ -521,7 +525,6 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Existing development-only automatic analysis limit.
   autoAnalysisCalls.value += 1
 
   markIssueChecking(snapshot)
@@ -584,6 +587,7 @@ async function runAutomaticAnalysis(
     }
 
     markIssueCheckFailure(snapshot)
+
     autoAnalysisError.value =
       error instanceof Error
         ? error.message
@@ -666,7 +670,6 @@ function retryCoachingFeedback() {
     return
   }
 
-  // Do not rebuild the request. Retry the same payload.
   void saveCoachingFeedback(feedbackRequest.value)
 }
 
@@ -696,13 +699,11 @@ function handleSessionCompleted(
 
   completionOutcome.value = outcome
 
-  // No coaching evaluation means no feedback API request.
   if (feedback === null) {
     feedbackSaveStatus.value = 'none'
     return
   }
 
-  // Preserve the submitted evaluation for safe retries.
   feedbackRequest.value = { ...feedback }
 
   void saveCoachingFeedback(feedbackRequest.value)
@@ -756,7 +757,6 @@ function returnToProblemInput() {
       <div class="completion-meta">
         <div class="completion-meta-item">
           <span>종료 방식</span>
-
           <strong>
             {{
               completionOutcome.receipt.completion_mode
@@ -769,7 +769,6 @@ function returnToProblemInput() {
 
         <div class="completion-meta-item">
           <span>외부 채점 결과</span>
-
           <strong>
             {{
               completionOutcome.receipt.judge_verdict
@@ -783,7 +782,6 @@ function returnToProblemInput() {
 
         <div class="completion-meta-item">
           <span>프로그래밍 언어</span>
-
           <strong>
             {{ completionOutcome.request.language.toUpperCase() }}
           </strong>
@@ -791,7 +789,6 @@ function returnToProblemInput() {
 
         <div class="completion-meta-item">
           <span>최종 코드 Revision</span>
-
           <strong>
             {{ completionOutcome.receipt.code_revision }}
           </strong>
@@ -799,7 +796,6 @@ function returnToProblemInput() {
 
         <div class="completion-meta-item">
           <span>종료 시각</span>
-
           <strong>
             {{
               new Date(
@@ -811,7 +807,6 @@ function returnToProblemInput() {
 
         <div class="completion-meta-item">
           <span>서버 처리 결과</span>
-
           <strong>
             {{
               completionOutcome.created
@@ -838,7 +833,6 @@ function returnToProblemInput() {
         이번 풀이에는 외부 채점 결과가 기록되지 않았습니다.
       </div>
 
-      <!-- Coaching evaluation result, not another survey -->
       <section
         class="coaching-record"
         :class="`feedback-${feedbackSaveStatus}`"
@@ -950,7 +944,6 @@ function returnToProblemInput() {
     </header>
 
     <div class="workspace-grid">
-      <!-- Problem Panel -->
       <section class="panel problem-panel">
         <div class="panel-header">
           <h2>문제</h2>
@@ -962,7 +955,6 @@ function returnToProblemInput() {
         />
       </section>
 
-      <!-- Code Editor Panel -->
       <section class="panel editor-panel">
         <div class="panel-header">
           <h2>코드 에디터</h2>
@@ -1004,7 +996,6 @@ function returnToProblemInput() {
         </div>
       </section>
 
-      <!-- AI Coach Panel -->
       <aside class="panel coach-panel">
         <div class="panel-header">
           <h2>AI Coach</h2>
@@ -1012,7 +1003,6 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
-          <!-- Automatic Analysis Control -->
           <section class="control-card">
             <div class="control-heading">
               <h3>자동 AI 분석</h3>
@@ -1050,7 +1040,6 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Code Observation -->
           <section class="observation-card">
             <h3>코드 관찰 상태</h3>
 
@@ -1127,7 +1116,6 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Internal Automatic Analysis -->
           <section class="observation-card">
             <h3>내부 자동 분석</h3>
 
@@ -1165,14 +1153,27 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Proactive Coach Feed -->
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :current-revision="codeRevision"
             :issue-recovery="issueRecovery"
           />
 
-          <!-- Progressive Hints -->
+          <CoachQuestionPanel
+            :session-id="sessionId"
+            :problem-text="problemText"
+            :current-code="currentCode"
+            :language="selectedLanguage"
+            :current-revision="codeRevision"
+            :latest-coaching="
+              analysisResult?.analyzed_revision === codeRevision
+                ? analysisResult.summary
+                : autoAnalysisResult?.analyzed_revision === codeRevision
+                  ? autoAnalysisResult.summary
+                  : null
+            "
+          />
+
           <ProgressiveHintPanel
             :session-id="sessionId"
             :problem-text="problemText"
@@ -1181,7 +1182,6 @@ function returnToProblemInput() {
             :current-revision="codeRevision"
           />
 
-          <!-- Pre-submission Review -->
           <SubmissionReviewPanel
             :session-id="sessionId"
             :problem-text="problemText"
@@ -1191,7 +1191,6 @@ function returnToProblemInput() {
             :disabled="isAnalyzing || isAutoAnalyzing"
           />
 
-          <!-- Manual AI Analysis -->
           <button
             type="button"
             class="analyze-button"
@@ -1284,10 +1283,6 @@ function returnToProblemInput() {
 </template>
 
 <style scoped>
-/* --------------------------------------------------
-   Workspace Layout
--------------------------------------------------- */
-
 .workspace {
   min-height: 100vh;
   padding: 20px;
@@ -1418,10 +1413,6 @@ function returnToProblemInput() {
   font-size: 11px;
   font-weight: 700;
 }
-
-/* --------------------------------------------------
-   Existing AI Coach Controls
--------------------------------------------------- */
 
 .observation-card,
 .feedback-card,
@@ -1592,10 +1583,6 @@ function returnToProblemInput() {
   white-space: nowrap;
 }
 
-/* --------------------------------------------------
-   Completed Session
--------------------------------------------------- */
-
 .completion-page {
   min-height: 100vh;
   padding: 60px 20px;
@@ -1669,10 +1656,6 @@ function returnToProblemInput() {
   line-height: 1.8;
 }
 
-/* --------------------------------------------------
-   Coaching Feedback Status
--------------------------------------------------- */
-
 .coaching-record {
   margin-top: 24px;
   padding: 16px;
@@ -1733,10 +1716,6 @@ function returnToProblemInput() {
   font-weight: 700;
   cursor: pointer;
 }
-
-/* --------------------------------------------------
-   Final Code and Navigation
--------------------------------------------------- */
 
 .completion-section {
   margin-top: 28px;
@@ -1800,10 +1779,6 @@ function returnToProblemInput() {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
-/* --------------------------------------------------
-   Responsive
--------------------------------------------------- */
 
 @media (max-width: 1050px) {
   .workspace-grid {
