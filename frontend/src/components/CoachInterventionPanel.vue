@@ -1,4 +1,3 @@
-
 <script setup lang="ts">
 import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 
@@ -10,10 +9,12 @@ import {
   type InterventionReason,
 } from '@/services/intervention-policy'
 import type { AnalysisResult } from '@/types/analysis'
+import type { IssueRecoveryNotice } from '@/services/analysis-trigger'
 
 const props = defineProps<{
   analysisResult: AnalysisResult | null
   currentRevision: number
+  issueRecovery?: IssueRecoveryNotice | null
 }>()
 
 type FeedbackSource = 'auto' | 'simulation'
@@ -329,6 +330,52 @@ onBeforeUnmount(() => {
       </p>
     </div>
 
+    <!-- Recheck notices are independent of the 60-second coaching cooldown. -->
+    <div
+      v-if="issueRecovery"
+      class="recovery-notice"
+      :class="`recovery-${issueRecovery.phase}`"
+      role="status"
+      aria-live="polite"
+    >
+      <strong v-if="issueRecovery.phase === 'pending'">
+        경고 위치 수정 감지 · 재검증 대기
+      </strong>
+      <strong v-else-if="issueRecovery.phase === 'checking'">
+        수정한 코드 재검증 중
+      </strong>
+      <strong v-else-if="issueRecovery.phase === 'cleared'">
+        최신 분석에서 이전 경고가 재발견되지 않았습니다
+      </strong>
+      <strong v-else-if="issueRecovery.phase === 'issues_found'">
+        재검증 완료 · 검토할 내용이 남아 있습니다
+      </strong>
+      <strong v-else>
+        재검증 실패 · 다시 확인할 수 있습니다
+      </strong>
+
+      <p v-if="issueRecovery.phase === 'pending'">
+        지적된 줄이 변경됐습니다. 자동 분석이 OFF이거나 호출 한도에
+        도달했다면 수동 분석을 실행해 주세요. 수정만으로 오류 해결이
+        확정되지는 않습니다.
+      </p>
+      <p v-else-if="issueRecovery.phase === 'checking'">
+        현재 Revision을 AI로 확인하고 있습니다.
+      </p>
+      <p v-else-if="issueRecovery.phase === 'cleared'">
+        이전 경고가 최신 AI 분석에서 확인되지 않았습니다.
+        정답 판정이나 실제 코드 실행 결과를 의미하지는 않습니다.
+      </p>
+      <p v-else-if="issueRecovery.phase === 'issues_found'">
+        새 분석에 문제가 보고됐습니다. 최신 분석 결과를 확인해 주세요.
+        과거 경고와 동일한 문제인지는 단정하지 않습니다.
+      </p>
+      <p v-else>
+        기존 경고를 해결했다고 판단하지 않았습니다.
+        필요하면 수동 AI 분석으로 다시 확인해 주세요.
+      </p>
+    </div>
+
     <div v-if="messages.length === 0" class="feed-empty">
       아직 전달된 코칭 메시지가 없습니다.
       <p>
@@ -360,7 +407,23 @@ onBeforeUnmount(() => {
         </p>
 
         <p
-          v-if="message.revision !== currentRevision"
+          v-if="
+            message.source === 'auto' &&
+            message.candidate.kind === 'issue' &&
+            issueRecovery?.originRevision === message.revision
+          "
+          class="outdated-note"
+        >
+          {{
+            issueRecovery?.phase === 'cleared'
+              ? '이전 경고: 최신 분석에서는 재발견되지 않았습니다.'
+              : issueRecovery?.phase === 'pending' || issueRecovery?.phase === 'checking'
+                ? '이 경고가 지적한 코드 줄이 수정되어 재검증을 기다리거나 진행 중입니다.'
+                : '이전 경고입니다. 최신 분석을 기준으로 다시 확인해 주세요.'
+          }}
+        </p>
+        <p
+          v-else-if="message.revision !== currentRevision"
           class="outdated-note"
         >
           이전 코드 Revision에서 전달된 메시지입니다.
@@ -456,6 +519,41 @@ onBeforeUnmount(() => {
   color: #475569;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.recovery-notice {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.recovery-notice strong {
+  color: #334155;
+  font-size: 12px;
+}
+
+.recovery-notice p {
+  margin: 7px 0 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.recovery-notice.recovery-cleared {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.recovery-notice.recovery-cleared strong {
+  color: #166534;
+}
+
+.recovery-notice.recovery-issues_found,
+.recovery-notice.recovery-failed {
+  border-color: #fed7aa;
+  background: #fffbeb;
 }
 
 .feed-empty {

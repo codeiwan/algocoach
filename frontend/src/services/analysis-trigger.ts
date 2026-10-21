@@ -19,12 +19,25 @@ export type TriggerReason =
   | 'SHORT_CODE'
   | 'UNCHANGED'
   | 'COOLDOWN'
+  | 'ISSUE_RECHECK'
   | 'ELIGIBLE'
 
 export interface TriggerDecision {
   eligible: boolean
   reason: TriggerReason
   message: string
+}
+
+/** Informational state, not a proof that a bug was fixed. */
+export interface IssueRecoveryNotice {
+  originRevision: number
+  checkedRevision: number | null
+  phase: 'pending' | 'checking' | 'cleared' | 'issues_found' | 'failed'
+}
+
+export interface TriggerOptions {
+  /** The learner modified a line cited by a previous AI issue. */
+  recheckEditedIssue?: boolean
 }
 
 /**
@@ -37,6 +50,7 @@ export function evaluateAnalysisTrigger(
   snapshot: CodeSnapshot,
   lastSuggestion: TriggerSuggestion | null,
   nowMs: number,
+  options: TriggerOptions = {},
 ): TriggerDecision {
   // 1. Ignore empty code.
   if (!snapshot.code.trim()) {
@@ -75,11 +89,23 @@ export function evaluateAnalysisTrigger(
     const elapsedMs = nowMs - lastSuggestion.suggestedAtMs
 
     if (elapsedMs < TRIGGER_COOLDOWN_MS) {
-      return {
-        eligible: false,
-        reason: 'COOLDOWN',
-        message: '분석 후보 선정 간격이 지나지 않아 관찰을 계속합니다.',
+      if (!options.recheckEditedIssue) {
+        return {
+          eligible: false,
+          reason: 'COOLDOWN',
+          message: '분석 후보 선정 간격이 지나지 않아 관찰을 계속합니다.',
+        }
       }
+    }
+  }
+
+  // Prefer rechecking a previously reported issue even for tiny edits.
+  // The caller still enforces automatic-analysis OFF and its request cap.
+  if (options.recheckEditedIssue) {
+    return {
+      eligible: true,
+      reason: 'ISSUE_RECHECK',
+      message: '기존 경고 위치의 수정이 감지되어 재검증을 우선합니다.',
     }
   }
 

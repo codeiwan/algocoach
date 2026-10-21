@@ -17,6 +17,7 @@ import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
+import { hasEditedReportedIssueLine } from '@/services/issue-recovery'
 import {
   recordSessionFeedback,
   type SessionFeedbackReceipt,
@@ -28,6 +29,7 @@ import {
   type CodeSnapshot,
   type TriggerDecision,
   type TriggerSuggestion,
+  type IssueRecoveryNotice,
 } from '@/services/analysis-trigger'
 
 import type { AnalysisResult } from '@/types/analysis'
@@ -164,6 +166,96 @@ const stableSnapshot = ref<CodeSnapshot | null>(null)
 const triggerDecision = ref<TriggerDecision | null>(null)
 const lastSuggestion = ref<TriggerSuggestion | null>(null)
 
+/** The last analysis which reported concrete source-line issues. */
+interface ReportedIssueSnapshot {
+  snapshot: CodeSnapshot
+  issues: AnalysisResult['issues']
+}
+
+const lastReportedIssues = ref<ReportedIssueSnapshot | null>(null)
+const issueRecovery = ref<IssueRecoveryNotice | null>(null)
+
+function editedReportedIssue(snapshot: CodeSnapshot): boolean {
+  const previous = lastReportedIssues.value
+  return (
+    previous !== null &&
+    previous.snapshot.language === snapshot.language &&
+    hasEditedReportedIssueLine(
+      previous.snapshot.code,
+      snapshot.code,
+      previous.issues,
+    )
+  )
+}
+
+function observeIssueEdit(snapshot: CodeSnapshot) {
+  const previous = lastReportedIssues.value
+
+  if (previous !== null && editedReportedIssue(snapshot)) {
+    issueRecovery.value = {
+      originRevision: previous.snapshot.revision,
+      checkedRevision: null,
+      phase: 'pending',
+    }
+    return
+  }
+
+  // Do not keep displaying successful verification after new edits.
+  issueRecovery.value = null
+}
+
+function markIssueChecking(snapshot: CodeSnapshot) {
+  const previous = lastReportedIssues.value
+
+  if (previous !== null && editedReportedIssue(snapshot)) {
+    issueRecovery.value = {
+      originRevision: previous.snapshot.revision,
+      checkedRevision: null,
+      phase: 'checking',
+    }
+  }
+}
+
+function markIssueCheckFailure(snapshot: CodeSnapshot) {
+  const notice = issueRecovery.value
+
+  if (
+    notice !== null &&
+    notice.phase === 'checking' &&
+    snapshot.revision === codeRevision.value &&
+    snapshot.language === selectedLanguage.value &&
+    snapshot.code === currentCode.value
+  ) {
+    issueRecovery.value = { ...notice, phase: 'failed' }
+  }
+}
+
+function acceptFreshAnalysis(
+  snapshot: CodeSnapshot,
+  result: AnalysisResult,
+) {
+  const previous = lastReportedIssues.value
+  const notice = issueRecovery.value
+
+  if (
+    previous !== null &&
+    notice !== null &&
+    notice.originRevision === previous.snapshot.revision &&
+    editedReportedIssue(snapshot)
+  ) {
+    issueRecovery.value = {
+      originRevision: notice.originRevision,
+      checkedRevision: snapshot.revision,
+      phase: result.issues.length === 0 ? 'cleared' : 'issues_found',
+    }
+  }
+
+  // A later edit will be compared with the newest issue-bearing code.
+  lastReportedIssues.value = result.issues.length > 0
+    ? { snapshot, issues: result.issues }
+    : null
+}
+
 let observationTimer: ReturnType<typeof setTimeout> | null = null
 
 const observationStatusText = computed(() => {
@@ -209,6 +301,11 @@ function considerAutomaticAnalysis(
     snapshot,
     lastSuggestion.value,
     nowMs,
+    {
+      recheckEditedIssue:
+        issueRecovery.value?.phase === 'pending' &&
+        editedReportedIssue(snapshot),
+    },
   )
 
   triggerDecision.value = decision
@@ -272,6 +369,8 @@ watch([selectedLanguage, currentCode], () => {
     revision: codeRevision.value,
   }
 
+  observeIssueEdit(snapshot)
+
   observationTimer = setTimeout(() => {
     observationTimer = null
 
@@ -303,6 +402,11 @@ watch(autoAnalysisEnabled, (enabled) => {
     isAutoAnalyzing.value = false
     autoAnalysisResult.value = null
     autoAnalysisError.value = ''
+
+    // Aborting a recheck cannot establish that the error is resolved.
+    if (issueRecovery.value?.phase === 'checking') {
+      issueRecovery.value = { ...issueRecovery.value, phase: 'pending' }
+    }
     return
   }
 
@@ -339,7 +443,13 @@ async function runAnalysis() {
   const revision = codeRevision.value
   const codeSnapshot = currentCode.value
   const languageSnapshot = selectedLanguage.value
+  const snapshot: CodeSnapshot = {
+    language: languageSnapshot,
+    code: codeSnapshot,
+    revision,
+  }
 
+  markIssueChecking(snapshot)
   isAnalyzing.value = true
   analysisResult.value = null
   errorMessage.value = ''
@@ -373,8 +483,10 @@ async function runAnalysis() {
       )
     }
 
+    acceptFreshAnalysis(snapshot, result)
     analysisResult.value = result
   } catch (error) {
+    markIssueCheckFailure(snapshot)
     if (completionOutcome.value !== null) {
       return
     }
@@ -412,6 +524,7 @@ async function runAutomaticAnalysis(
   // Existing development-only automatic analysis limit.
   autoAnalysisCalls.value += 1
 
+  markIssueChecking(snapshot)
   isAutoAnalyzing.value = true
   autoAnalysisResult.value = null
   autoAnalysisError.value = ''
@@ -453,6 +566,7 @@ async function runAutomaticAnalysis(
       )
     }
 
+    acceptFreshAnalysis(snapshot, result)
     autoAnalysisResult.value = result
   } catch (error) {
     if (
@@ -469,6 +583,7 @@ async function runAutomaticAnalysis(
       lastSuggestion.value = null
     }
 
+    markIssueCheckFailure(snapshot)
     autoAnalysisError.value =
       error instanceof Error
         ? error.message
@@ -1054,6 +1169,7 @@ function returnToProblemInput() {
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :current-revision="codeRevision"
+            :issue-recovery="issueRecovery"
           />
 
           <!-- Progressive Hints -->
