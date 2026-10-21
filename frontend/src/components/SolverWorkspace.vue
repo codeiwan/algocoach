@@ -18,7 +18,12 @@ import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
+import {
+  AUTO_STABLE_MS, AUTO_REFLECTION_MS, AUTO_WINDOW_MS,
+  AUTO_MAX_PER_SESSION, evaluateAutoAnalysisBudget,
+} from '@/services/autonomous-analysis-policy'
 import { hasEditedReportedIssueLine } from '@/services/issue-recovery'
+import { substantiallyChangedSinceReview } from '@/services/coaching-satisfaction'
 
 import {
   recordSessionFeedback,
@@ -35,6 +40,7 @@ import {
 } from '@/services/analysis-trigger'
 
 import type { AnalysisResult } from '@/types/analysis'
+import type { SubmissionReviewResult } from '@/types/submission'
 import type { CoachingAssistanceActivity, CoachingAssistanceEvent } from '@/types/coaching-assistance'
 import type { StructuredProblem } from '@/types/problem'
 import type { ProgrammingLanguage } from '@/types/programming-language'
@@ -137,10 +143,12 @@ const errorMessage = ref('')
 // Automatic analysis
 // --------------------------------------------------
 
-const MAX_AUTO_ANALYSES = 3
+const MAX_AUTO_ANALYSES = AUTO_MAX_PER_SESSION
 
 const autoAnalysisEnabled = ref(true)
 const autoAnalysisCalls = ref(0)
+const autoRequestTimes = ref<number[]>([])
+const autoScheduleStatus = ref<string | null>(null)
 
 const isAutoAnalyzing = ref(false)
 const autoAnalysisResult = ref<AnalysisResult | null>(null)
@@ -151,6 +159,96 @@ let autoAbortController: AbortController | null = null
 const autoAnalysisLimitReached = computed(
   () => autoAnalysisCalls.value >= MAX_AUTO_ANALYSES,
 )
+
+/**
+ * Only refill the 24-request session allowance.
+ * Do not clear the rolling 10-minute budget or the last analysis snapshot.
+ */
+function refillAutomaticBudget() {
+  if (completionOutcome.value !== null || isAutoAnalyzing.value) return
+  autoAnalysisCalls.value = 0
+  if (autoScheduleStatus.value?.includes('예산')) {
+    autoScheduleStatus.value = null
+  }
+}
+
+// Code accepted by the last positive static review (not a judge verdict).
+// Offer suppression persists across small edits and ends after substantive rewrites.
+const reviewedCodeBaseline = ref<{ code: string; language: ProgrammingLanguage } | null>(null)
+
+const suppressProactiveOffers = computed(() => {
+  const baseline = reviewedCodeBaseline.value
+  return (
+    baseline !== null &&
+    baseline.language === selectedLanguage.value &&
+    !substantiallyChangedSinceReview(baseline.code, currentCode.value)
+  )
+})
+
+function markReviewSatisfied() {
+  reviewedCodeBaseline.value = {
+    code: currentCode.value,
+    language: selectedLanguage.value,
+  }
+}
+
+// Short visual acknowledgement of model feedback, not judge verdicts.
+const editorFeedbackGlow = ref<'success' | 'risk' | null>(null)
+let editorGlowTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearEditorGlow() {
+  if (editorGlowTimer !== null) clearTimeout(editorGlowTimer)
+  editorGlowTimer = null
+  editorFeedbackGlow.value = null
+}
+
+function showEditorGlow(tone: 'success' | 'risk') {
+  clearEditorGlow()
+  editorFeedbackGlow.value = tone
+  editorGlowTimer = setTimeout(clearEditorGlow, 2_400)
+}
+
+function considerPositiveAnalysis(result: AnalysisResult | null) {
+  if (
+    result === null ||
+    completionOutcome.value !== null ||
+    result.analyzed_revision !== codeRevision.value
+  ) return
+
+  if (
+    result.issues.length === 0 &&
+    (result.positive_observation?.trim() || result.progress_status === 'REVIEWING')
+  ) {
+    // Praise for a partial implementation is not a completed review.
+    if (result.progress_status === 'REVIEWING') {
+      markReviewSatisfied()
+    }
+    showEditorGlow('success')
+  } else if (result.issues.some(
+    (issue) => issue.severity === 'CRITICAL' || issue.severity === 'WARNING',
+  )) {
+    reviewedCodeBaseline.value = null
+  }
+}
+
+watch(autoAnalysisResult, considerPositiveAnalysis)
+watch(analysisResult, considerPositiveAnalysis)
+
+function handleSubmissionReviewed(result: SubmissionReviewResult) {
+  if (
+    completionOutcome.value !== null ||
+    result.reviewed_revision !== codeRevision.value
+  ) return
+
+  if (result.status === 'RISK_FOUND') {
+    reviewedCodeBaseline.value = null
+    showEditorGlow('risk')
+  } else if (result.status === 'NO_OBVIOUS_RISK') {
+    markReviewSatisfied()
+    showEditorGlow('success')
+  }
+}
+
 
 // --------------------------------------------------
 // AI question activity — Stage 5.8B
@@ -230,7 +328,7 @@ type ObservationPhase =
   | 'editing'
   | 'settled'
 
-const OBSERVATION_DELAY_MS = 800
+const OBSERVATION_DELAY_MS = AUTO_STABLE_MS
 
 const observationPhase = ref<ObservationPhase>('waiting')
 const stableSnapshot = ref<CodeSnapshot | null>(null)
@@ -400,37 +498,41 @@ const latestCoachingText = computed<string | null>(() => {
 // Automatic analysis eligibility
 // --------------------------------------------------
 
-function considerAutomaticAnalysis(
+
+let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearAutoAnalysisTimer() {
+  if (autoAnalysisTimer !== null) {
+    clearTimeout(autoAnalysisTimer)
+    autoAnalysisTimer = null
+  }
+}
+
+function scheduleAutomaticAnalysis(
   snapshot: CodeSnapshot,
+  waitMs = AUTO_REFLECTION_MS,
 ) {
-  if (completionOutcome.value !== null) {
+  clearAutoAnalysisTimer()
+
+  if (!autoAnalysisEnabled.value || completionOutcome.value !== null) {
     return
   }
 
-  const nowMs = Date.now()
+  autoScheduleStatus.value = '코드 안정 · 분석 시점까지 관찰 중'
 
-  const decision = evaluateAnalysisTrigger(
-    snapshot,
-    lastSuggestion.value,
-    nowMs,
-    {
-      recheckEditedIssue:
-        issueRecovery.value?.phase === 'pending' &&
-        editedReportedIssue(snapshot),
-    },
-  )
+  autoAnalysisTimer = setTimeout(() => {
+    autoAnalysisTimer = null
+    considerAutomaticAnalysis(snapshot)
+  }, waitMs)
+}
 
-  triggerDecision.value = decision
-
-  if (!decision.eligible) {
-    return
-  }
-
-  if (!autoAnalysisEnabled.value) {
-    return
-  }
-
+function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
   if (
+    completionOutcome.value !== null ||
+    !autoAnalysisEnabled.value ||
+    snapshot.revision !== codeRevision.value ||
+    snapshot.language !== selectedLanguage.value ||
+    snapshot.code !== currentCode.value ||
     isAnalyzing.value ||
     isAutoAnalyzing.value ||
     autoAnalysisLimitReached.value
@@ -438,10 +540,65 @@ function considerAutomaticAnalysis(
     return
   }
 
+  const nowMs = Date.now()
+
+  const priorityRecheck =
+    issueRecovery.value?.phase === 'pending' &&
+    editedReportedIssue(snapshot)
+
+  const decision = evaluateAnalysisTrigger(
+    snapshot,
+    lastSuggestion.value,
+    nowMs,
+    { recheckEditedIssue: priorityRecheck },
+  )
+
+  triggerDecision.value = decision
+
+  if (!decision.eligible) {
+    autoScheduleStatus.value = null
+
+    if (decision.reason === 'COOLDOWN' && lastSuggestion.value) {
+      const remaining =
+        lastSuggestion.value.suggestedAtMs + 10_000 - nowMs
+
+      scheduleAutomaticAnalysis(
+        snapshot,
+        Math.max(1, remaining),
+      )
+    }
+
+    return
+  }
+
+  const budget = evaluateAutoAnalysisBudget(
+    nowMs,
+    autoRequestTimes.value,
+    autoAnalysisCalls.value,
+    priorityRecheck,
+  )
+
+  if (!budget.allowed) {
+    if (budget.waitMs > 0) {
+      scheduleAutomaticAnalysis(snapshot, budget.waitMs)
+    }
+
+    autoScheduleStatus.value =
+      budget.reason === 'WINDOW_BUDGET'
+        ? '최근 자동 분석 요청량이 많아 잠시 대기 중'
+        : budget.reason === 'SESSION_BUDGET'
+          ? '이번 세션의 자동 분석 예산을 모두 사용했습니다.'
+          : '요청 간격 조절 중 · 새 코드 상태를 관찰하고 있습니다.'
+
+    return
+  }
+
   lastSuggestion.value = {
     snapshot,
     suggestedAtMs: nowMs,
   }
+
+  autoScheduleStatus.value = null
 
   void runAutomaticAnalysis(snapshot)
 }
@@ -456,9 +613,12 @@ watch([selectedLanguage, currentCode], () => {
   }
 
   codeRevision.value += 1
+  clearEditorGlow()
 
   analysisResult.value = null
   errorMessage.value = ''
+  clearAutoAnalysisTimer()
+  autoScheduleStatus.value = null
 
   autoAbortController?.abort()
   autoAbortController = null
@@ -499,7 +659,7 @@ watch([selectedLanguage, currentCode], () => {
     stableSnapshot.value = snapshot
     observationPhase.value = 'settled'
 
-    considerAutomaticAnalysis(snapshot)
+    scheduleAutomaticAnalysis(snapshot)
   }, OBSERVATION_DELAY_MS)
 })
 
@@ -509,6 +669,8 @@ watch([selectedLanguage, currentCode], () => {
 
 watch(autoAnalysisEnabled, (enabled) => {
   if (!enabled) {
+    clearAutoAnalysisTimer()
+    autoScheduleStatus.value = null
     autoAbortController?.abort()
     autoAbortController = null
 
@@ -539,7 +701,7 @@ watch(autoAnalysisEnabled, (enabled) => {
     snapshot.language === selectedLanguage.value &&
     snapshot.code === currentCode.value
   ) {
-    considerAutomaticAnalysis(snapshot)
+    scheduleAutomaticAnalysis(snapshot)
   }
 })
 
@@ -642,7 +804,17 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
+  // Dispatched requests count even if later cancelled.
+  const requestedAtMs = Date.now()
+
   autoAnalysisCalls.value += 1
+
+  autoRequestTimes.value = [
+    ...autoRequestTimes.value.filter(
+      (time) => requestedAtMs - time < AUTO_WINDOW_MS,
+    ),
+    requestedAtMs,
+  ]
 
   markIssueChecking(snapshot)
   isAutoAnalyzing.value = true
@@ -799,6 +971,9 @@ function handleSessionCompleted(
   }
 
   autoAnalysisEnabled.value = false
+  clearEditorGlow()
+  clearAutoAnalysisTimer()
+  autoScheduleStatus.value = null
 
   autoAbortController?.abort()
   autoAbortController = null
@@ -828,6 +1003,8 @@ function handleSessionCompleted(
 // --------------------------------------------------
 
 onBeforeUnmount(() => {
+  clearEditorGlow()
+  clearAutoAnalysisTimer()
   if (observationTimer !== null) {
     clearTimeout(observationTimer)
     observationTimer = null
@@ -1109,10 +1286,27 @@ function returnToProblemInput() {
           <CodeEditor
             v-model="currentCode"
             :language="selectedLanguage"
+            :feedback-glow="editorFeedbackGlow"
           />
 
-          <div class="editor-footer">
-            Monaco Editor · 4 Spaces · LLM Analysis
+          <div class="editor-bottom-bar">
+            <div class="editor-footer">
+              Monaco Editor · 4 Spaces · LLM Analysis
+            </div>
+
+            <CoachAssistActions
+              :hide-hint-button="true"
+              :editor-placement="true"
+              :session-id="sessionId"
+              :problem-text="problemText"
+              :current-code="currentCode"
+              :language="selectedLanguage"
+              :current-revision="codeRevision"
+              :disabled="isAnalyzing || isAutoAnalyzing || isQuestionAnswering"
+              @delivered="handleAssistanceDelivered"
+              @activity="handleAssistanceActivity"
+              @reviewed="handleSubmissionReviewed"
+            />
           </div>
         </div>
       </section>
@@ -1132,8 +1326,10 @@ function returnToProblemInput() {
           -->
           <CoachAgentToolbar
             v-model:auto-enabled="autoAnalysisEnabled"
+            @refill-budget="refillAutomaticBudget"
             :auto-analysis-calls="autoAnalysisCalls"
             :max-auto-analyses="MAX_AUTO_ANALYSES"
+            :auto-schedule-status="autoScheduleStatus"
             :current-revision="codeRevision"
             :observation-phase="observationPhase"
             :is-auto-analyzing="isAutoAnalyzing"
@@ -1145,6 +1341,12 @@ function returnToProblemInput() {
             :manual-analysis-error="errorMessage"
             :issue-recovery="issueRecovery"
             :assistance-activity="assistanceActivity"
+            :feedback-disabled="
+              isAnalyzing ||
+              isAutoAnalyzing ||
+              !currentCode.trim()
+            "
+            @request-feedback="runAnalysis"
           />
 
           <CoachInterventionPanel
@@ -1162,28 +1364,22 @@ function returnToProblemInput() {
             :manual-analysis-error="errorMessage"
             :question-exchanges="questionExchanges"
             :assistance-events="assistanceEvents"
+            :session-id="sessionId"
+            :problem-text="problemText"
+            :current-code="currentCode"
+            :language="selectedLanguage"
+            :assistance-busy="
+              isAnalyzing ||
+              isAutoAnalyzing ||
+              isQuestionAnswering ||
+              assistanceActivity !== null
+            "
+            :suppress-proactive-offers="suppressProactiveOffers"
+            @assistance-delivered="handleAssistanceDelivered"
+            @assistance-activity="handleAssistanceActivity"
           />
 
           <div class="coach-action-dock">
-            <button
-              type="button"
-              class="analyze-button"
-              :disabled="
-                isAnalyzing ||
-                isAutoAnalyzing ||
-                !currentCode.trim()
-              "
-              @click="runAnalysis"
-            >
-              {{
-                isAnalyzing
-                  ? 'AI 피드백 생성 중...'
-                  : isAutoAnalyzing
-                    ? '자동 분석 진행 중...'
-                    : '지금 피드백 받기'
-              }}
-            </button>
-
             <!--
               Question activity events are forwarded
               to the main agent status.
@@ -1197,17 +1393,6 @@ function returnToProblemInput() {
               :latest-coaching="latestCoachingText"
               @answered="handleQuestionAnswered"
               @activity="handleQuestionActivity"
-            />
-
-            <CoachAssistActions
-              :session-id="sessionId"
-              :problem-text="problemText"
-              :current-code="currentCode"
-              :language="selectedLanguage"
-              :current-revision="codeRevision"
-              :disabled="isAnalyzing || isAutoAnalyzing || isQuestionAnswering"
-              @delivered="handleAssistanceDelivered"
-              @activity="handleAssistanceActivity"
             />
 
 

@@ -422,3 +422,47 @@
   gap: 0;
   min-height: 0;
 }
+
+/* Stage 5.14 - conversation arrival and smooth history reflow */
+#app .coach-panel .latest-section { position: relative; }
+#app .coach-panel .coach-arrival-enter-active {
+  transition: opacity 340ms ease-out, transform 340ms cubic-bezier(.18,.7,.2,1);
+}
+#app .coach-panel .coach-arrival-enter-from {
+  opacity: 0;
+  transform: translateY(-13px);
+}
+#app .coach-panel .coach-arrival-leave-active {
+  position: absolute;
+  left: 0; right: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+#app .coach-panel .coach-arrival-leave-to {
+  opacity: 0;
+  transform: translateY(7px);
+}
+#app .coach-panel .coach-history-move {
+  transition: transform 380ms cubic-bezier(.18,.7,.2,1);
+}
+#app .coach-panel .coach-history-enter-active {
+  transition: transform 380ms cubic-bezier(.18,.7,.2,1), opacity 350ms ease;
+}
+#app .coach-panel .coach-history-enter-from {
+  opacity: 0;
+  transform: translateY(-14px);
+}
+#app .coach-panel .coach-offer-enter-active {
+  transition: transform 420ms cubic-bezier(.18,.7,.2,1), opacity 420ms ease;
+}
+#app .coach-panel .coach-offer-enter-from {
+  transform: translateY(-14px);
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  #app .coach-panel .coach-arrival-enter-active,
+  #app .coach-panel .coach-arrival-leave-active,
+  #app .coach-panel .coach-history-move,
+  #app .coach-panel .coach-history-enter-active,
+  #app .coach-panel .coach-offer-enter-active { transition: none; }
+}

@@ -218,3 +218,30 @@
     gap: 12px;
   }
 }
+
+/* Stage 5.15 - centered submission pre-review in the editor footer */
+#app .editor-panel .editor-bottom-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 270px) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 9px 0 1px;
+}
+#app .editor-panel .editor-bottom-bar::after { content: ''; }
+#app .editor-panel .editor-bottom-bar > .editor-footer {
+  padding-top: 0;
+  min-width: 0;
+  line-height: 1.5;
+}
+#app .editor-panel .editor-bottom-bar > .coach-assist-actions {
+  justify-self: center;
+}
+@media (max-width: 600px) {
+  #app .editor-panel .editor-bottom-bar {
+    grid-template-columns: 1fr;
+  }
+  #app .editor-panel .editor-bottom-bar::after { display: none; }
+  #app .editor-panel .editor-bottom-bar > .editor-footer { text-align: center; }
+}

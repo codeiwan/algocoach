@@ -8,6 +8,9 @@ import {
 } from 'vue'
 
 import CoachMarkdownText from '@/components/CoachMarkdownText.vue'
+import CoachProactiveOffer from '@/components/CoachProactiveOffer.vue'
+import type { ProgrammingLanguage } from '@/types/programming-language'
+import type { CoachingAssistanceActivity } from '@/types/coaching-assistance'
 import type { CoachingAssistanceEvent } from '@/types/coaching-assistance'
 
 import {
@@ -51,6 +54,17 @@ const props = defineProps<{
   manualAnalysisError?: string
   questionExchanges?: readonly QuestionExchange[]
   assistanceEvents?: readonly CoachingAssistanceEvent[]
+  sessionId: string
+  problemText: string
+  currentCode: string
+  language: ProgrammingLanguage
+  assistanceBusy?: boolean
+  suppressProactiveOffers?: boolean
+}>()
+
+const emit = defineEmits<{
+  assistanceDelivered: [event: CoachingAssistanceEvent]
+  assistanceActivity: [state: CoachingAssistanceActivity]
 }>()
 
 type MessageSource = 'auto' | 'manual' | 'simulation' | 'hint' | 'review'
@@ -720,15 +734,30 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="feed-scroll">
+      <CoachProactiveOffer
+        :session-id="sessionId"
+        :problem-text="problemText"
+        :current-code="currentCode"
+        :language="language"
+        :current-revision="currentRevision"
+        :auto-enabled="!!autoEnabled"
+        :busy="assistanceBusy"
+        :suppress-offers="suppressProactiveOffers"
+        @delivered="emit('assistanceDelivered', $event)"
+        @activity="emit('assistanceActivity', $event)"
+      />
+
       <div class="latest-section">
         <div class="section-heading">
           <strong>최신 대화</strong>
           <span>Revision {{ currentRevision }}</span>
         </div>
 
+        <Transition name="coach-arrival">
         <!-- Pending issue recovery -->
         <article
           v-if="recoveryTakesPriority && recoveryDisplay"
+          :key="`recovery-${issueRecovery?.phase}-${issueRecovery?.checkedRevision}`"
           class="latest-card recovery-card"
           :class="`recovery-${recoveryDisplay.tone}`"
         >
@@ -743,6 +772,7 @@ onBeforeUnmount(() => {
         <!-- Latest question and answer -->
         <article
           v-else-if="latestEntry?.kind === 'question'"
+          :key="latestEntry.key"
           class="latest-card conversation-card"
         >
           <div class="latest-meta">
@@ -783,6 +813,7 @@ onBeforeUnmount(() => {
         <!-- Latest automatic or manual coaching -->
         <article
           v-else-if="latestEntry?.kind === 'coaching'"
+          :key="latestEntry.key"
           class="latest-card"
           :class="latestEntry.tone"
         >
@@ -833,6 +864,7 @@ onBeforeUnmount(() => {
         <!-- Recovery without a current coaching message -->
         <article
           v-else-if="recoveryDisplay"
+          :key="`recovery-fallback-${issueRecovery?.phase}`"
           class="latest-card recovery-card"
           :class="`recovery-${recoveryDisplay.tone}`"
         >
@@ -843,6 +875,7 @@ onBeforeUnmount(() => {
 
         <div
           v-else
+          key="empty-coaching"
           class="empty-coaching"
         >
           <strong>아직 전달할 코칭이 없습니다.</strong>
@@ -852,6 +885,7 @@ onBeforeUnmount(() => {
             AI 응답이 이곳에 표시됩니다.
           </p>
         </div>
+        </Transition>
       </div>
 
       <!-- Previous conversations and coaching -->
@@ -864,7 +898,7 @@ onBeforeUnmount(() => {
           <span>{{ previousEntries.length }}개</span>
         </div>
 
-        <div class="history-list">
+        <TransitionGroup name="coach-history" tag="div" class="history-list">
           <article
             v-for="entry in previousEntries"
             :key="entry.key"
@@ -943,7 +977,7 @@ onBeforeUnmount(() => {
               이전 코드 Revision의 기록입니다.
             </p>
           </article>
-        </div>
+        </TransitionGroup>
       </section>
 
       <details

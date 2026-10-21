@@ -12,6 +12,7 @@ const props = defineProps<{
   autoEnabled: boolean
   autoAnalysisCalls: number
   maxAutoAnalyses: number
+  autoScheduleStatus?: string | null
   currentRevision: number
   observationPhase: ObservationPhase
   isAutoAnalyzing: boolean
@@ -23,11 +24,23 @@ const props = defineProps<{
   autoAnalysisError: string
   manualAnalysisError: string
   issueRecovery: IssueRecoveryNotice | null
+  feedbackDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
   'update:autoEnabled': [enabled: boolean]
+  refillBudget: []
+  requestFeedback: []
 }>()
+
+const isWorking = computed(() =>
+  Boolean(
+    props.isAutoAnalyzing ||
+    props.isManualAnalyzing ||
+    props.isQuestionAnswering ||
+    props.assistanceActivity !== null && props.assistanceActivity !== undefined,
+  ),
+)
 
 const limitReached = computed(
   () => props.autoAnalysisCalls >= props.maxAutoAnalyses,
@@ -160,6 +173,13 @@ const activity = computed<{
     }
   }
 
+  if (props.autoScheduleStatus) {
+    return {
+      text: props.autoScheduleStatus,
+      tone: 'idle',
+    }
+  }
+
   if (props.observationPhase === 'settled') {
     return {
       text: '코드 입력 안정 · 다음 동작 대기',
@@ -182,6 +202,7 @@ function onAutoToggle(event: Event) {
 <template>
   <header
     class="coach-agent-toolbar"
+    :class="{ 'is-thinking': isWorking }"
     aria-label="AlgoCoach 자동 코칭 및 활동 상태"
   >
     <div class="toolbar-identity">
@@ -212,8 +233,18 @@ function onAutoToggle(event: Event) {
         </span>
       </label>
 
-      <span class="usage-label">
-        자동 분석 {{ autoAnalysisCalls }}/{{ maxAutoAnalyses }}
+      <span class="usage-row">
+        <span class="usage-label">
+          자동 분석 {{ autoAnalysisCalls }}/{{ maxAutoAnalyses }}
+        </span>
+        <button
+          type="button"
+          class="budget-refill"
+          :disabled="isAutoAnalyzing || autoAnalysisCalls === 0"
+          title="자동 분석 세션 24회 예산 리필 (최근 10분 요청 제한 유지)"
+          aria-label="자동 분석 세션 횟수 리필"
+          @click="emit('refillBudget')"
+        >↻</button>
       </span>
     </div>
 
@@ -227,13 +258,27 @@ function onAutoToggle(event: Event) {
         :class="activity.tone"
         aria-hidden="true"
       />
-      <span>{{ activity.text }}</span>
+      <span class="activity-description">{{ activity.text }}</span>
+      <span v-if="isWorking" class="typing-indicator" aria-hidden="true">
+        <i /><i /><i />
+      </span>
+      <button
+        type="button"
+        class="toolbar-feedback-button"
+        :disabled="feedbackDisabled || isWorking"
+        title="현재 코드에 대해 수동 AI 피드백 요청"
+        @click="emit('requestFeedback')"
+      >
+        <span aria-hidden="true">✦</span> 지금 피드백 받기
+      </button>
     </div>
   </header>
 </template>
 
 <style scoped>
 .coach-agent-toolbar {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -382,5 +427,59 @@ function onAutoToggle(event: Event) {
   .activity-dot.working {
     animation: none;
   }
+}
+</style>
+<style scoped>
+.coach-agent-toolbar.is-thinking {
+  animation: gentle-agent-glow 4.8s ease-in-out infinite;
+}
+@keyframes gentle-agent-glow {
+  0%, 100% { background: linear-gradient(135deg, #eff6ff, #eef2ff); box-shadow: 0 0 0 rgba(79,70,229,0); }
+  50% { background: linear-gradient(135deg, #eaf3ff, #eef0ff); box-shadow: 0 0 16px rgba(79,70,229,0.11); }
+}
+.usage-row { display: inline-flex; align-items: center; gap: 5px; }
+.budget-refill {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  border: 1px solid #c7d2fe; border-radius: 5px;
+  background: rgba(255,255,255,.8); color: #475569;
+  font-size: 15px; line-height: 1; cursor: pointer;
+}
+.budget-refill:hover:not(:disabled) { border-color: #6366f1; color: #3730a3; }
+.budget-refill:disabled { cursor: default; opacity: .35; }
+.typing-indicator { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; }
+.typing-indicator i { width: 4px; height: 4px; border-radius: 50%; background: #6366f1; animation: thinking-dot 2.2s ease-in-out infinite; }
+.typing-indicator i:nth-child(2) { animation-delay: .35s; }
+.typing-indicator i:nth-child(3) { animation-delay: .7s; }
+@keyframes thinking-dot { 0%, 60%, 100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .coach-agent-toolbar.is-thinking, .typing-indicator i { animation: none; }
+}
+</style>
+
+<style scoped>
+.toolbar-activity .activity-description { flex: 1 1 0; min-width: 0; }
+.toolbar-activity .toolbar-feedback-button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(79, 70, 229, .22);
+  border-radius: 7px;
+  padding: 6px 9px;
+  background: #fff;
+  color: #3730a3;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.toolbar-activity .toolbar-feedback-button:hover:not(:disabled) {
+  background: #eef2ff;
+  border-color: #818cf8;
+}
+.toolbar-activity .toolbar-feedback-button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
 }
 </style>
