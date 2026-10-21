@@ -1,3 +1,4 @@
+
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,7 +22,7 @@ class HintSource(StrEnum):
 
 
 class HintRequest(BaseModel):
-    """Context provided to the hint generation system."""
+    """Context provided to an LLM for hint generation."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -34,15 +35,27 @@ class HintRequest(BaseModel):
 
     level: HintLevel
 
-    # Previously delivered hints help avoid repetition.
     previous_hints: list[str] = Field(
         default_factory=list,
         max_length=3,
     )
 
 
+class NextHintRequest(BaseModel):
+    """Public API request without a client-controlled hint level."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(min_length=1, max_length=128)
+    code_revision: int = Field(ge=0)
+
+    problem_text: str = Field(min_length=1, max_length=20_000)
+    current_code: str
+    language: ProgrammingLanguage
+
+
 class HintResult(BaseModel):
-    """A structured hint produced by the coaching system."""
+    """Structured guidance returned by the coaching system."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,6 +63,4 @@ class HintResult(BaseModel):
     level: HintLevel
 
     message: str = Field(min_length=1)
-
-    # Optional reference to a relevant portion of the code.
     code_reference: str | None = None
