@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import {
+  computed,
+  onBeforeUnmount,
+  reactive,
+  ref,
+  watch,
+} from 'vue'
 
 import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
+import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
+
 import {
   evaluateAnalysisTrigger,
   type CodeSnapshot,
@@ -33,8 +41,6 @@ const emit = defineEmits<{
 // Session
 // --------------------------------------------------
 
-// A new workspace receives a new unique session ID.
-// The ID remains stable during code edits and language changes.
 const sessionId = crypto.randomUUID()
 
 // --------------------------------------------------
@@ -90,7 +96,10 @@ const autoAnalysisLimitReached = computed(
 // Code observation
 // --------------------------------------------------
 
-type ObservationPhase = 'waiting' | 'editing' | 'settled'
+type ObservationPhase =
+  | 'waiting'
+  | 'editing'
+  | 'settled'
 
 const OBSERVATION_DELAY_MS = 800
 
@@ -106,8 +115,10 @@ const observationStatusText = computed(() => {
   switch (observationPhase.value) {
     case 'editing':
       return '코드 편집 중'
+
     case 'settled':
       return '입력 안정'
+
     default:
       return '입력 대기'
   }
@@ -122,13 +133,17 @@ const { isIdle, idleStatusText } = useIdleDetection(
   selectedLanguage,
 )
 
-const { history, latestEntry } = useCodeHistory(stableSnapshot)
+const { history, latestEntry } = useCodeHistory(
+  stableSnapshot,
+)
 
 // --------------------------------------------------
 // Analysis trigger policy
 // --------------------------------------------------
 
-function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
+function considerAutomaticAnalysis(
+  snapshot: CodeSnapshot,
+) {
   const nowMs = Date.now()
 
   const decision = evaluateAnalysisTrigger(
@@ -147,7 +162,10 @@ function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
     return
   }
 
-  if (isAnalyzing.value || autoAnalysisLimitReached.value) {
+  if (
+    isAnalyzing.value ||
+    autoAnalysisLimitReached.value
+  ) {
     return
   }
 
@@ -166,11 +184,11 @@ function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
 watch([selectedLanguage, currentCode], () => {
   codeRevision.value += 1
 
-  // Invalidate previous manual analysis.
+  // Clear the previous manual analysis.
   analysisResult.value = null
   errorMessage.value = ''
 
-  // Cancel previous automatic analysis.
+  // Cancel an outdated automatic analysis.
   autoAbortController?.abort()
   autoAbortController = null
 
@@ -178,7 +196,6 @@ watch([selectedLanguage, currentCode], () => {
   autoAnalysisResult.value = null
   autoAnalysisError.value = ''
 
-  // Reset observation state.
   stableSnapshot.value = null
   triggerDecision.value = null
   observationPhase.value = 'editing'
@@ -297,7 +314,9 @@ async function runAnalysis() {
 // Automatic analysis
 // --------------------------------------------------
 
-async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
+async function runAutomaticAnalysis(
+  snapshot: CodeSnapshot,
+) {
   if (
     !autoAnalysisEnabled.value ||
     isAnalyzing.value ||
@@ -311,7 +330,8 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Failed or cancelled attempts count toward the development limit.
+  // Failed and cancelled attempts count toward the
+  // development-only automatic analysis limit.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -346,7 +366,9 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       return
     }
 
-    if (result.analyzed_revision !== snapshot.revision) {
+    if (
+      result.analyzed_revision !== snapshot.revision
+    ) {
       throw new Error(
         '자동 분석 결과의 Revision이 일치하지 않습니다.',
       )
@@ -361,7 +383,9 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
       return
     }
 
-    if (lastSuggestion.value?.snapshot === snapshot) {
+    if (
+      lastSuggestion.value?.snapshot === snapshot
+    ) {
       lastSuggestion.value = null
     }
 
@@ -432,7 +456,10 @@ function returnToProblemInput() {
           <h2>코드 에디터</h2>
 
           <div class="editor-controls">
-            <label for="language-select" class="sr-only">
+            <label
+              for="language-select"
+              class="sr-only"
+            >
               프로그래밍 언어
             </label>
 
@@ -473,7 +500,7 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
-          <!-- Automatic Analysis Control -->
+          <!-- Automatic analysis control -->
           <section class="control-card">
             <div class="control-heading">
               <h3>자동 AI 분석</h3>
@@ -511,7 +538,7 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Code Observation -->
+          <!-- Code observation -->
           <section class="observation-card">
             <h3>코드 관찰 상태</h3>
 
@@ -520,7 +547,10 @@ function returnToProblemInput() {
               <strong>{{ observationStatusText }}</strong>
             </p>
 
-            <p v-if="stableSnapshot" class="snapshot-info">
+            <p
+              v-if="stableSnapshot"
+              class="snapshot-info"
+            >
               안정된 스냅샷:
               Revision {{ stableSnapshot.revision }}
               · {{ stableSnapshot.language }}
@@ -531,16 +561,26 @@ function returnToProblemInput() {
               <strong>{{ idleStatusText }}</strong>
             </p>
 
-            <p v-if="isIdle" class="observation-description">
+            <p
+              v-if="isIdle"
+              class="observation-description"
+            >
               최근 30초 동안 코드 수정이 감지되지 않았습니다.
               실제 풀이 정체 여부는 아직 판단하지 않습니다.
             </p>
 
-            <div v-if="triggerDecision" class="trigger-decision">
+            <div
+              v-if="triggerDecision"
+              class="trigger-decision"
+            >
               <p>
                 분석 후보:
                 <strong>
-                  {{ triggerDecision.eligible ? '추천' : '보류' }}
+                  {{
+                    triggerDecision.eligible
+                      ? '추천'
+                      : '보류'
+                  }}
                 </strong>
               </p>
 
@@ -555,8 +595,8 @@ function returnToProblemInput() {
             </p>
 
             <p class="observation-description">
-              기록된 코드 변경: {{ history.length }}개
-              (최근 최대 20개)
+              기록된 코드 변경:
+              {{ history.length }}개 (최근 최대 20개)
             </p>
 
             <p
@@ -575,11 +615,14 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Internal Automatic Analysis -->
+          <!-- Internal automatic analysis -->
           <section class="observation-card">
             <h3>내부 자동 분석</h3>
 
-            <p v-if="isAutoAnalyzing" role="status">
+            <p
+              v-if="isAutoAnalyzing"
+              role="status"
+            >
               LangGraph 자동 분석 실행 중...
             </p>
 
@@ -610,13 +653,13 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Proactive Coach Feed -->
+          <!-- Proactive coaching -->
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :current-revision="codeRevision"
           />
 
-          <!-- User-requested Progressive Hints -->
+          <!-- Progressive hints -->
           <ProgressiveHintPanel
             :session-id="sessionId"
             :problem-text="problemText"
@@ -625,32 +668,56 @@ function returnToProblemInput() {
             :current-revision="codeRevision"
           />
 
-          <!-- Manual Analysis -->
+          <!-- Pre-submission AI review -->
+          <SubmissionReviewPanel
+            :session-id="sessionId"
+            :problem-text="problemText"
+            :current-code="currentCode"
+            :language="selectedLanguage"
+            :current-revision="codeRevision"
+            :disabled="isAnalyzing || isAutoAnalyzing"
+          />
+
+          <!-- Manual code analysis -->
           <button
             type="button"
             class="analyze-button"
             :disabled="isAnalyzing || isAutoAnalyzing"
             @click="runAnalysis"
           >
-            {{ isAnalyzing ? '분석 중...' : '수동 AI 분석 실행' }}
+            {{
+              isAnalyzing
+                ? '분석 중...'
+                : '수동 AI 분석 실행'
+            }}
           </button>
 
-          <section v-if="analysisResult" class="feedback-card">
+          <section
+            v-if="analysisResult"
+            class="feedback-card"
+          >
             <h3>수동 분석 결과</h3>
 
             <dl>
               <dt>Revision</dt>
-              <dd>{{ analysisResult.analyzed_revision }}</dd>
+              <dd>
+                {{ analysisResult.analyzed_revision }}
+              </dd>
 
               <dt>진행 상태</dt>
               <dd>{{ analysisResult.progress_status }}</dd>
 
               <dt>알고리즘</dt>
-              <dd>{{ analysisResult.algorithm ?? '미판단' }}</dd>
+              <dd>
+                {{ analysisResult.algorithm ?? '미판단' }}
+              </dd>
 
               <dt>복잡도</dt>
               <dd>
-                {{ analysisResult.complexity_estimate ?? '미판단' }}
+                {{
+                  analysisResult.complexity_estimate
+                    ?? '미판단'
+                }}
               </dd>
             </dl>
 
