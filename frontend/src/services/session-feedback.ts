@@ -1,3 +1,11 @@
+export type CoachingOutcome =
+  | 'ACCURATE_AND_HELPFUL'
+  | 'ACCURATE_BUT_NOT_HELPFUL'
+  | 'MISLEADING_OR_INCORRECT'
+  | 'NOT_USED'
+  | 'UNABLE_TO_ASSESS'
+
+// Legacy type retained until old survey component cleanup.
 export type MainChallenge =
   | 'UNDERSTANDING'
   | 'ALGORITHM'
@@ -8,12 +16,17 @@ export type MainChallenge =
 
 export interface SessionFeedbackRequest {
   session_id: string
-  difficulty_rating: number
-  intervention_timing_rating: number | null
-  hint_helpfulness_rating: number | null
-  review_helpfulness_rating: number | null
-  main_challenge: MainChallenge | null
+
+  // New primary feedback field.
+  coaching_outcome?: CoachingOutcome | null
   comment: string | null
+
+  // Legacy fields are optional for backward compatibility.
+  difficulty_rating?: number | null
+  intervention_timing_rating?: number | null
+  hint_helpfulness_rating?: number | null
+  review_helpfulness_rating?: number | null
+  main_challenge?: MainChallenge | null
 }
 
 export interface SessionFeedbackReceipt {
@@ -46,21 +59,25 @@ export async function recordSessionFeedback(
   })
 
   if (!response.ok) {
-    let message = `설문 저장에 실패했습니다. (HTTP ${response.status})`
+    let message = `AI 코칭 평가 저장에 실패했습니다. (HTTP ${response.status})`
 
     if (response.status === 409) {
       message =
-        '이미 다른 설문이 기록됐거나, 완료된 풀이 세션을 찾을 수 없습니다.'
+        '이미 다른 평가가 저장됐거나 완료된 풀이 세션을 찾을 수 없습니다.'
     } else if (response.status === 422) {
-      message = '설문 입력값을 확인해 주세요.'
+      message =
+        'AI 코칭 평가 데이터가 올바르지 않습니다.'
     }
 
-    throw new SessionFeedbackApiError(message, response.status)
+    throw new SessionFeedbackApiError(
+      message,
+      response.status,
+    )
   }
 
   if (response.status !== 200 && response.status !== 201) {
     throw new Error(
-      `예상하지 못한 설문 응답입니다. (HTTP ${response.status})`,
+      `예상하지 못한 평가 저장 응답입니다. (HTTP ${response.status})`,
     )
   }
 
@@ -72,7 +89,7 @@ export async function recordSessionFeedback(
     receipt.status !== 'RECORDED'
   ) {
     throw new Error(
-      '설문 저장 확인서가 요청한 세션과 일치하지 않습니다.',
+      '코칭 평가 저장 확인서가 요청한 세션과 일치하지 않습니다.',
     )
   }
 

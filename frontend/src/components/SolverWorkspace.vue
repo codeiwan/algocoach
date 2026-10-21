@@ -12,12 +12,16 @@ import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
 import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
-import SessionFeedbackPanel from '@/components/SessionFeedbackPanel.vue'
 import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
+import {
+  recordSessionFeedback,
+  type SessionFeedbackReceipt,
+  type SessionFeedbackRequest,
+} from '@/services/session-feedback'
 
 import {
   evaluateAnalysisTrigger,
@@ -53,6 +57,46 @@ const sessionId = crypto.randomUUID()
 const completionOutcome = ref<SessionCompletionOutcome | null>(
   null,
 )
+
+// --------------------------------------------------
+// Coaching feedback persistence
+// --------------------------------------------------
+
+type FeedbackSaveStatus =
+  | 'none'
+  | 'saving'
+  | 'saved'
+  | 'failed'
+
+const feedbackSaveStatus = ref<FeedbackSaveStatus>('none')
+
+const feedbackRequest = ref<SessionFeedbackRequest | null>(
+  null,
+)
+
+const feedbackReceipt = ref<SessionFeedbackReceipt | null>(
+  null,
+)
+
+const feedbackError = ref('')
+
+let feedbackController: AbortController | null = null
+
+const feedbackStatusLabel = computed(() => {
+  switch (feedbackSaveStatus.value) {
+    case 'saving':
+      return 'AI 코칭 평가를 기록하고 있습니다.'
+
+    case 'saved':
+      return 'AI 코칭 평가가 기록되었습니다.'
+
+    case 'failed':
+      return '풀이 종료는 완료됐지만 AI 코칭 평가 저장에 실패했습니다.'
+
+    default:
+      return '별도의 AI 코칭 평가를 제출하지 않았습니다.'
+  }
+})
 
 // --------------------------------------------------
 // Editor state
@@ -365,7 +409,7 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Development-only automatic analysis request limit.
+  // Existing development-only automatic analysis limit.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -438,11 +482,86 @@ async function runAutomaticAnalysis(
 }
 
 // --------------------------------------------------
+// Feedback persistence after completion
+// --------------------------------------------------
+
+async function saveCoachingFeedback(
+  request: SessionFeedbackRequest,
+) {
+  if (feedbackSaveStatus.value === 'saving') {
+    return
+  }
+
+  const controller = new AbortController()
+
+  feedbackController = controller
+  feedbackSaveStatus.value = 'saving'
+  feedbackError.value = ''
+
+  let timedOut = false
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 15_000)
+
+  try {
+    const receipt = await recordSessionFeedback(
+      request,
+      controller.signal,
+    )
+
+    if (
+      controller.signal.aborted ||
+      feedbackController !== controller
+    ) {
+      return
+    }
+
+    feedbackReceipt.value = receipt
+    feedbackSaveStatus.value = 'saved'
+  } catch (error) {
+    if (feedbackController !== controller) {
+      return
+    }
+
+    feedbackSaveStatus.value = 'failed'
+
+    feedbackError.value = timedOut
+      ? '평가 저장 응답이 지연되었습니다. 동일한 요청으로 재시도할 수 있습니다.'
+      : (
+          error instanceof Error
+            ? error.message
+            : '코칭 평가 저장 중 오류가 발생했습니다.'
+        )
+  } finally {
+    clearTimeout(timeoutId)
+
+    if (feedbackController === controller) {
+      feedbackController = null
+    }
+  }
+}
+
+function retryCoachingFeedback() {
+  if (
+    feedbackSaveStatus.value !== 'failed' ||
+    feedbackRequest.value === null
+  ) {
+    return
+  }
+
+  // Do not rebuild the request. Retry the same payload.
+  void saveCoachingFeedback(feedbackRequest.value)
+}
+
+// --------------------------------------------------
 // Session completion
 // --------------------------------------------------
 
 function handleSessionCompleted(
   outcome: SessionCompletionOutcome,
+  feedback: SessionFeedbackRequest | null,
 ) {
   if (completionOutcome.value !== null) {
     return
@@ -461,6 +580,17 @@ function handleSessionCompleted(
   }
 
   completionOutcome.value = outcome
+
+  // No coaching evaluation means no feedback API request.
+  if (feedback === null) {
+    feedbackSaveStatus.value = 'none'
+    return
+  }
+
+  // Preserve the submitted evaluation for safe retries.
+  feedbackRequest.value = { ...feedback }
+
+  void saveCoachingFeedback(feedbackRequest.value)
 }
 
 // --------------------------------------------------
@@ -475,9 +605,16 @@ onBeforeUnmount(() => {
 
   autoAbortController?.abort()
   autoAbortController = null
+
+  feedbackController?.abort()
+  feedbackController = null
 })
 
 function returnToProblemInput() {
+  if (feedbackSaveStatus.value === 'saving') {
+    return
+  }
+
   emit('back')
 }
 </script>
@@ -497,8 +634,8 @@ function returnToProblemInput() {
 
       <p class="completion-description">
         풀이 종료 기록이 서버에 접수됐습니다.
-        아래 내용은 종료 요청 당시의 코드와
-        사용자가 직접 입력한 결과입니다.
+        아래 내용은 종료 당시의 코드와
+        사용자가 직접 보고한 채점 결과입니다.
       </p>
 
       <div class="completion-meta">
@@ -574,9 +711,9 @@ function returnToProblemInput() {
         v-if="completionOutcome.receipt.verdict_source === 'USER_REPORTED'"
         class="verdict-notice"
       >
-        이 채점 결과는 사용자가 외부 사이트에서 확인하여
+        이 채점 결과는 외부 사이트에서 확인하여
         직접 입력한 정보입니다.
-        AlgoCoach가 코드를 실행하거나 채점한 결과가 아닙니다.
+        AlgoCoach가 실행하거나 채점한 결과는 아닙니다.
       </div>
 
       <div
@@ -586,12 +723,48 @@ function returnToProblemInput() {
         이번 풀이에는 외부 채점 결과가 기록되지 않았습니다.
       </div>
 
-      <!-- New: optional post-session learning feedback -->
-      <div class="feedback-container">
-        <SessionFeedbackPanel
-          :session-id="completionOutcome.receipt.session_id"
-        />
-      </div>
+      <!-- Coaching evaluation result, not another survey -->
+      <section
+        class="coaching-record"
+        :class="`feedback-${feedbackSaveStatus}`"
+        aria-live="polite"
+      >
+        <h2>AI 코칭 평가</h2>
+
+        <p>{{ feedbackStatusLabel }}</p>
+
+        <p
+          v-if="feedbackSaveStatus === 'saved' && feedbackReceipt"
+          class="feedback-time"
+        >
+          기록 시각:
+          {{
+            new Date(
+              feedbackReceipt.recorded_at,
+            ).toLocaleString('ko-KR')
+          }}
+        </p>
+
+        <template v-if="feedbackSaveStatus === 'failed'">
+          <p class="feedback-error">
+            {{ feedbackError }}
+          </p>
+
+          <button
+            type="button"
+            class="retry-feedback-button"
+            @click="retryCoachingFeedback"
+          >
+            동일한 평가 다시 저장
+          </button>
+
+          <p class="feedback-hint">
+            평가 저장 여부가 불확실해도
+            풀이 종료 기록은 이미 완료되었습니다.
+            평가 재시도는 선택 사항입니다.
+          </p>
+        </template>
+      </section>
 
       <section
         v-if="completionOutcome.request.notes"
@@ -610,16 +783,22 @@ function returnToProblemInput() {
       </section>
 
       <p class="completion-limitation">
-        현재 개발 버전에서는 완료 기록과 설문을 서버 메모리에 보관합니다.
+        현재 개발 버전에서는 완료 기록과 코칭 평가를
+        서버 메모리에 보관합니다.
         서버가 재시작되면 저장된 기록이 사라질 수 있습니다.
       </p>
 
       <button
         type="button"
         class="return-button"
+        :disabled="feedbackSaveStatus === 'saving'"
         @click="returnToProblemInput"
       >
-        문제 입력 화면으로 돌아가기
+        {{
+          feedbackSaveStatus === 'saving'
+            ? '코칭 평가 기록 확인 중...'
+            : '문제 입력 화면으로 돌아가기'
+        }}
       </button>
     </div>
   </div>
@@ -1374,9 +1553,74 @@ function returnToProblemInput() {
   line-height: 1.8;
 }
 
-.feedback-container {
+/* --------------------------------------------------
+   Coaching Feedback Status
+-------------------------------------------------- */
+
+.coaching-record {
   margin-top: 24px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
 }
+
+.coaching-record h2 {
+  margin: 0 0 8px;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.coaching-record p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.coaching-record.feedback-saved {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.coaching-record.feedback-failed {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.coaching-record .feedback-time {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.coaching-record .feedback-error {
+  margin-top: 8px;
+  color: #b91c1c;
+}
+
+.coaching-record .feedback-hint {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.retry-feedback-button {
+  margin-top: 12px;
+  padding: 10px 13px;
+  border: 1px solid #d97706;
+  border-radius: 7px;
+  background: white;
+  color: #92400e;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* --------------------------------------------------
+   Final Code and Navigation
+-------------------------------------------------- */
 
 .completion-section {
   margin-top: 28px;
@@ -1432,8 +1676,13 @@ function returnToProblemInput() {
   cursor: pointer;
 }
 
-.return-button:hover {
+.return-button:hover:not(:disabled) {
   background: #1d4ed8;
+}
+
+.return-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* --------------------------------------------------
