@@ -11,6 +11,7 @@ import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
 import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
+import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
 import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
@@ -28,6 +29,11 @@ import type { AnalysisResult } from '@/types/analysis'
 import type { StructuredProblem } from '@/types/problem'
 import type { ProgrammingLanguage } from '@/types/programming-language'
 
+import {
+  JUDGE_VERDICT_LABELS,
+  type SessionCompletionOutcome,
+} from '@/types/session-completion'
+
 const props = defineProps<{
   problemText: string
   structuredProblem: StructuredProblem | null
@@ -42,6 +48,10 @@ const emit = defineEmits<{
 // --------------------------------------------------
 
 const sessionId = crypto.randomUUID()
+
+const completionOutcome = ref<SessionCompletionOutcome | null>(
+  null,
+)
 
 // --------------------------------------------------
 // Editor state
@@ -144,6 +154,10 @@ const { history, latestEntry } = useCodeHistory(
 function considerAutomaticAnalysis(
   snapshot: CodeSnapshot,
 ) {
+  if (completionOutcome.value !== null) {
+    return
+  }
+
   const nowMs = Date.now()
 
   const decision = evaluateAnalysisTrigger(
@@ -182,13 +196,15 @@ function considerAutomaticAnalysis(
 // --------------------------------------------------
 
 watch([selectedLanguage, currentCode], () => {
+  if (completionOutcome.value !== null) {
+    return
+  }
+
   codeRevision.value += 1
 
-  // Clear the previous manual analysis.
   analysisResult.value = null
   errorMessage.value = ''
 
-  // Cancel an outdated automatic analysis.
   autoAbortController?.abort()
   autoAbortController = null
 
@@ -215,6 +231,7 @@ watch([selectedLanguage, currentCode], () => {
     observationTimer = null
 
     if (
+      completionOutcome.value !== null ||
       snapshot.revision !== codeRevision.value ||
       snapshot.language !== selectedLanguage.value ||
       snapshot.code !== currentCode.value
@@ -244,6 +261,10 @@ watch(autoAnalysisEnabled, (enabled) => {
     return
   }
 
+  if (completionOutcome.value !== null) {
+    return
+  }
+
   const snapshot = stableSnapshot.value
 
   if (
@@ -262,7 +283,11 @@ watch(autoAnalysisEnabled, (enabled) => {
 // --------------------------------------------------
 
 async function runAnalysis() {
-  if (isAnalyzing.value || isAutoAnalyzing.value) {
+  if (
+    completionOutcome.value !== null ||
+    isAnalyzing.value ||
+    isAutoAnalyzing.value
+  ) {
     return
   }
 
@@ -283,6 +308,10 @@ async function runAnalysis() {
       language: languageSnapshot,
     })
 
+    if (completionOutcome.value !== null) {
+      return
+    }
+
     if (
       revision !== codeRevision.value ||
       codeSnapshot !== currentCode.value ||
@@ -301,6 +330,10 @@ async function runAnalysis() {
 
     analysisResult.value = result
   } catch (error) {
+    if (completionOutcome.value !== null) {
+      return
+    }
+
     errorMessage.value =
       error instanceof Error
         ? error.message
@@ -318,6 +351,7 @@ async function runAutomaticAnalysis(
   snapshot: CodeSnapshot,
 ) {
   if (
+    completionOutcome.value !== null ||
     !autoAnalysisEnabled.value ||
     isAnalyzing.value ||
     autoAnalysisLimitReached.value
@@ -330,8 +364,7 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Failed and cancelled attempts count toward the
-  // development-only automatic analysis limit.
+  // This is a development-only request limit.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -351,6 +384,7 @@ async function runAutomaticAnalysis(
     )
 
     if (
+      completionOutcome.value !== null ||
       controller.signal.aborted ||
       autoAbortController !== controller ||
       !autoAnalysisEnabled.value
@@ -377,6 +411,7 @@ async function runAutomaticAnalysis(
     autoAnalysisResult.value = result
   } catch (error) {
     if (
+      completionOutcome.value !== null ||
       controller.signal.aborted ||
       autoAbortController !== controller
     ) {
@@ -402,6 +437,33 @@ async function runAutomaticAnalysis(
 }
 
 // --------------------------------------------------
+// Session completion
+// --------------------------------------------------
+
+function handleSessionCompleted(
+  outcome: SessionCompletionOutcome,
+) {
+  if (completionOutcome.value !== null) {
+    return
+  }
+
+  // Stop new automatic analyses after completing the session.
+  autoAnalysisEnabled.value = false
+
+  autoAbortController?.abort()
+  autoAbortController = null
+
+  isAutoAnalyzing.value = false
+
+  if (observationTimer !== null) {
+    clearTimeout(observationTimer)
+    observationTimer = null
+  }
+
+  completionOutcome.value = outcome
+}
+
+// --------------------------------------------------
 // Cleanup and navigation
 // --------------------------------------------------
 
@@ -421,20 +483,169 @@ function returnToProblemInput() {
 </script>
 
 <template>
-  <div class="workspace">
+  <!-- Completed Session -->
+  <div
+    v-if="completionOutcome"
+    class="completion-page"
+  >
+    <div class="completion-summary">
+      <span class="completion-eyebrow">
+        SESSION COMPLETED
+      </span>
+
+      <h1>풀이를 종료했습니다.</h1>
+
+      <p class="completion-description">
+        풀이 종료 기록이 서버에 접수됐습니다.
+        아래 내용은 종료 요청 당시의 코드와
+        사용자가 직접 입력한 결과입니다.
+      </p>
+
+      <div class="completion-meta">
+        <div class="completion-meta-item">
+          <span>종료 방식</span>
+
+          <strong>
+            {{
+              completionOutcome.receipt.completion_mode
+                === 'EXTERNAL_JUDGE'
+                ? '외부 채점 결과 기록'
+                : '제출 없이 종료'
+            }}
+          </strong>
+        </div>
+
+        <div class="completion-meta-item">
+          <span>외부 채점 결과</span>
+
+          <strong>
+            {{
+              completionOutcome.receipt.judge_verdict
+                ? JUDGE_VERDICT_LABELS[
+                    completionOutcome.receipt.judge_verdict
+                  ]
+                : '기록 없음'
+            }}
+          </strong>
+        </div>
+
+        <div class="completion-meta-item">
+          <span>프로그래밍 언어</span>
+
+          <strong>
+            {{ completionOutcome.request.language.toUpperCase() }}
+          </strong>
+        </div>
+
+        <div class="completion-meta-item">
+          <span>최종 코드 Revision</span>
+
+          <strong>
+            {{ completionOutcome.receipt.code_revision }}
+          </strong>
+        </div>
+
+        <div class="completion-meta-item">
+          <span>종료 시각</span>
+
+          <strong>
+            {{
+              new Date(
+                completionOutcome.receipt.completed_at,
+              ).toLocaleString('ko-KR')
+            }}
+          </strong>
+        </div>
+
+        <div class="completion-meta-item">
+          <span>서버 처리 결과</span>
+
+          <strong>
+            {{
+              completionOutcome.created
+                ? '신규 종료 기록'
+                : '기존 종료 기록 재확인'
+            }}
+          </strong>
+        </div>
+      </div>
+
+      <div
+        v-if="completionOutcome.receipt.verdict_source === 'USER_REPORTED'"
+        class="verdict-notice"
+      >
+        이 채점 결과는 사용자가 외부 사이트에서 확인하여
+        직접 입력한 정보입니다.
+        AlgoCoach가 코드를 실행하거나 채점한 결과가 아닙니다.
+      </div>
+
+      <div
+        v-else
+        class="verdict-notice"
+      >
+        이번 풀이에는 외부 채점 결과가 기록되지 않았습니다.
+      </div>
+
+      <section
+        v-if="completionOutcome.request.notes"
+        class="completion-section"
+      >
+        <h2>풀이 메모</h2>
+        <p class="completion-notes">
+          {{ completionOutcome.request.notes }}
+        </p>
+      </section>
+
+      <section class="completion-section">
+        <h2>최종 코드</h2>
+
+        <pre class="final-code">{{ completionOutcome.request.final_code || '작성한 코드가 없습니다.' }}</pre>
+      </section>
+
+      <p class="completion-limitation">
+        현재 개발 버전에서는 완료 기록을 서버 메모리에 보관합니다.
+        서버가 재시작되면 저장된 기록이 사라질 수 있습니다.
+      </p>
+
+      <button
+        type="button"
+        class="return-button"
+        @click="returnToProblemInput"
+      >
+        문제 입력 화면으로 돌아가기
+      </button>
+    </div>
+  </div>
+
+  <!-- Active Solver Workspace -->
+  <div
+    v-else
+    class="workspace"
+  >
     <header class="workspace-header">
       <div class="brand">
         <h1>AlgoCoach</h1>
         <span>코딩테스트 풀이 환경</span>
       </div>
 
-      <button
-        type="button"
-        class="back-button"
-        @click="returnToProblemInput"
-      >
-        ← 문제 입력으로
-      </button>
+      <div class="header-actions">
+        <SessionCompletionPanel
+          :session-id="sessionId"
+          :problem-text="problemText"
+          :current-code="currentCode"
+          :language="selectedLanguage"
+          :current-revision="codeRevision"
+          @completed="handleSessionCompleted"
+        />
+
+        <button
+          type="button"
+          class="back-button"
+          @click="returnToProblemInput"
+        >
+          ← 문제 입력으로
+        </button>
+      </div>
     </header>
 
     <div class="workspace-grid">
@@ -500,7 +711,7 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
-          <!-- Automatic analysis control -->
+          <!-- Automatic Analysis Control -->
           <section class="control-card">
             <div class="control-heading">
               <h3>자동 AI 분석</h3>
@@ -538,7 +749,7 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Code observation -->
+          <!-- Code Observation -->
           <section class="observation-card">
             <h3>코드 관찰 상태</h3>
 
@@ -615,7 +826,7 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Internal automatic analysis -->
+          <!-- Internal Automatic Analysis -->
           <section class="observation-card">
             <h3>내부 자동 분석</h3>
 
@@ -653,13 +864,13 @@ function returnToProblemInput() {
             </p>
           </section>
 
-          <!-- Proactive coaching -->
+          <!-- Proactive Coach Feed -->
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :current-revision="codeRevision"
           />
 
-          <!-- Progressive hints -->
+          <!-- Progressive Hints -->
           <ProgressiveHintPanel
             :session-id="sessionId"
             :problem-text="problemText"
@@ -668,7 +879,7 @@ function returnToProblemInput() {
             :current-revision="codeRevision"
           />
 
-          <!-- Pre-submission AI review -->
+          <!-- Pre-submission Review -->
           <SubmissionReviewPanel
             :session-id="sessionId"
             :problem-text="problemText"
@@ -678,7 +889,7 @@ function returnToProblemInput() {
             :disabled="isAnalyzing || isAutoAnalyzing"
           />
 
-          <!-- Manual code analysis -->
+          <!-- Manual AI Analysis -->
           <button
             type="button"
             class="analyze-button"
@@ -771,6 +982,10 @@ function returnToProblemInput() {
 </template>
 
 <style scoped>
+/* --------------------------------------------------
+   Workspace Layout
+-------------------------------------------------- */
+
 .workspace {
   min-height: 100vh;
   padding: 20px;
@@ -778,8 +993,9 @@ function returnToProblemInput() {
 
 .workspace-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 20px;
   margin-bottom: 20px;
 }
@@ -801,6 +1017,12 @@ function returnToProblemInput() {
   font-size: 13px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .back-button {
   padding: 10px 14px;
   border: 1px solid #cbd5e1;
@@ -808,6 +1030,7 @@ function returnToProblemInput() {
   background: white;
   color: #334155;
   font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -893,6 +1116,10 @@ function returnToProblemInput() {
   font-size: 11px;
   font-weight: 700;
 }
+
+/* --------------------------------------------------
+   Existing AI Coach Controls
+-------------------------------------------------- */
 
 .observation-card,
 .feedback-card,
@@ -1063,6 +1290,145 @@ function returnToProblemInput() {
   white-space: nowrap;
 }
 
+/* --------------------------------------------------
+   Completed Session
+-------------------------------------------------- */
+
+.completion-page {
+  min-height: 100vh;
+  padding: 60px 20px;
+  background: #f8fafc;
+}
+
+.completion-summary {
+  width: min(100%, 780px);
+  margin: 0 auto;
+  padding: 36px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: white;
+}
+
+.completion-eyebrow {
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.completion-summary h1 {
+  margin: 12px 0;
+  color: #0f172a;
+  font-size: 29px;
+}
+
+.completion-description {
+  margin: 0 0 28px;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.completion-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.completion-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 9px;
+  background: #f1f5f9;
+}
+
+.completion-meta-item span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.completion-meta-item strong {
+  color: #0f172a;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.verdict-notice {
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  background: #eff6ff;
+  color: #1e40af;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.completion-section {
+  margin-top: 28px;
+}
+
+.completion-section h2 {
+  margin: 0 0 12px;
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.completion-notes {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.final-code {
+  max-height: 380px;
+  overflow: auto;
+  margin: 0;
+  padding: 18px;
+  border-radius: 9px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre;
+  tab-size: 4;
+}
+
+.completion-limitation {
+  margin: 22px 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.return-button {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 9px;
+  background: #2563eb;
+  color: white;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.return-button:hover {
+  background: #1d4ed8;
+}
+
+/* --------------------------------------------------
+   Responsive
+-------------------------------------------------- */
+
 @media (max-width: 1050px) {
   .workspace-grid {
     grid-template-columns: 1fr;
@@ -1070,6 +1436,27 @@ function returnToProblemInput() {
 
   .panel {
     min-height: auto;
+  }
+}
+
+@media (max-width: 600px) {
+  .workspace-header,
+  .brand,
+  .header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .completion-page {
+    padding: 24px 12px;
+  }
+
+  .completion-summary {
+    padding: 20px;
+  }
+
+  .completion-meta {
+    grid-template-columns: 1fr;
   }
 }
 </style>
