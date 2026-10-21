@@ -19,6 +19,7 @@ import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
 import { hasEditedReportedIssueLine } from '@/services/issue-recovery'
+
 import {
   recordSessionFeedback,
   type SessionFeedbackReceipt,
@@ -137,8 +138,6 @@ const errorMessage = ref('')
 
 const MAX_AUTO_ANALYSES = 3
 
-// Stage 5.7C: automatic coaching is enabled by default.
-// The existing call cap remains in force.
 const autoAnalysisEnabled = ref(true)
 const autoAnalysisCalls = ref(0)
 
@@ -151,6 +150,33 @@ let autoAbortController: AbortController | null = null
 const autoAnalysisLimitReached = computed(
   () => autoAnalysisCalls.value >= MAX_AUTO_ANALYSES,
 )
+
+// --------------------------------------------------
+// Unified question history
+// --------------------------------------------------
+
+interface CoachingQuestionExchange {
+  id: number
+  question: string
+  answer: string
+  answeredRevision: number
+  atMs: number
+}
+
+const questionExchanges = ref<CoachingQuestionExchange[]>([])
+
+function handleQuestionAnswered(
+  exchange: CoachingQuestionExchange,
+) {
+  if (completionOutcome.value !== null) {
+    return
+  }
+
+  questionExchanges.value = [
+    exchange,
+    ...questionExchanges.value,
+  ].slice(0, 20)
+}
 
 // --------------------------------------------------
 // Code observation
@@ -203,6 +229,7 @@ function observeIssueEdit(snapshot: CodeSnapshot) {
       checkedRevision: null,
       phase: 'pending',
     }
+
     return
   }
 
@@ -286,7 +313,7 @@ const observationStatusText = computed(() => {
 })
 
 // --------------------------------------------------
-// Existing observation and history composables
+// Existing observation and history
 // --------------------------------------------------
 
 const { isIdle, idleStatusText } = useIdleDetection(
@@ -298,8 +325,6 @@ const { history, latestEntry } = useCodeHistory(
   stableSnapshot,
 )
 
-// Developer diagnostics are available only on request.
-// The learner's normal screen has no observation dashboard.
 const showDeveloperMonitor =
   import.meta.env.DEV &&
   new URLSearchParams(window.location.search).get(
@@ -307,7 +332,7 @@ const showDeveloperMonitor =
   ) === '1'
 
 // --------------------------------------------------
-// Coaching context for AI questions
+// Coaching context for questions
 // --------------------------------------------------
 
 const latestCoachingText = computed<string | null>(() => {
@@ -329,7 +354,7 @@ const latestCoachingText = computed<string | null>(() => {
 })
 
 // --------------------------------------------------
-// Analysis trigger policy
+// Automatic analysis eligibility
 // --------------------------------------------------
 
 function considerAutomaticAnalysis(
@@ -379,7 +404,7 @@ function considerAutomaticAnalysis(
 }
 
 // --------------------------------------------------
-// Code changes
+// Observe changes to code and language
 // --------------------------------------------------
 
 watch([selectedLanguage, currentCode], () => {
@@ -436,7 +461,7 @@ watch([selectedLanguage, currentCode], () => {
 })
 
 // --------------------------------------------------
-// Automatic analysis ON / OFF
+// Automatic coaching ON / OFF
 // --------------------------------------------------
 
 watch(autoAnalysisEnabled, (enabled) => {
@@ -476,7 +501,7 @@ watch(autoAnalysisEnabled, (enabled) => {
 })
 
 // --------------------------------------------------
-// Manual analysis: immediate learner-requested feedback
+// Manual code feedback
 // --------------------------------------------------
 
 async function runAnalysis() {
@@ -535,9 +560,6 @@ async function runAnalysis() {
     }
 
     acceptFreshAnalysis(snapshot, result)
-
-    // CoachInterventionPanel receives this result and shows
-    // it immediately without the automatic 60-second cooldown.
     analysisResult.value = result
   } catch (error) {
     markIssueCheckFailure(snapshot)
@@ -556,7 +578,7 @@ async function runAnalysis() {
 }
 
 // --------------------------------------------------
-// Automatic analysis
+// Automatic code analysis
 // --------------------------------------------------
 
 async function runAutomaticAnalysis(
@@ -722,7 +744,7 @@ function retryCoachingFeedback() {
 }
 
 // --------------------------------------------------
-// Session completion
+// Complete session
 // --------------------------------------------------
 
 function handleSessionCompleted(
@@ -1065,9 +1087,9 @@ function returnToProblemInput() {
             :auto-enabled="autoAnalysisEnabled"
             :is-auto-analyzing="isAutoAnalyzing"
             :is-manual-analyzing="isAnalyzing"
+            :question-exchanges="questionExchanges"
           />
 
-          <!-- Three primary coaching interactions -->
           <div class="coach-action-dock">
             <div class="auto-control-row">
               <label class="auto-control-label">
@@ -1123,9 +1145,9 @@ function returnToProblemInput() {
               :language="selectedLanguage"
               :current-revision="codeRevision"
               :latest-coaching="latestCoachingText"
+              @answered="handleQuestionAnswered"
             />
 
-            <!-- Secondary tools remain available -->
             <details class="secondary-tools">
               <summary>
                 추가 코칭 도구 · 힌트 / 제출 전 점검
@@ -1167,7 +1189,6 @@ function returnToProblemInput() {
               자동 분석 실패: {{ autoAnalysisError }}
             </p>
 
-            <!-- Development diagnostics: opt-in only -->
             <details
               v-if="showDeveloperMonitor"
               class="developer-monitor"
@@ -1213,10 +1234,6 @@ function returnToProblemInput() {
 </template>
 
 <style scoped>
-/* --------------------------------------------------
-   Workspace
--------------------------------------------------- */
-
 .workspace {
   min-height: 100vh;
   padding: 20px;
@@ -1348,10 +1365,6 @@ function returnToProblemInput() {
   font-weight: 700;
 }
 
-/* --------------------------------------------------
-   Coach action dock
--------------------------------------------------- */
-
 .coach-action-dock {
   display: flex;
   flex-direction: column;
@@ -1480,10 +1493,6 @@ function returnToProblemInput() {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
-
-/* --------------------------------------------------
-   Completed session
--------------------------------------------------- */
 
 .completion-page {
   min-height: 100vh;

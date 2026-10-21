@@ -23,6 +23,14 @@ import type {
   IssueRecoveryNotice,
 } from '@/services/analysis-trigger'
 
+interface QuestionExchange {
+  id: number
+  question: string
+  answer: string
+  answeredRevision: number
+  atMs: number
+}
+
 const props = defineProps<{
   analysisResult: AnalysisResult | null
   manualAnalysisResult?: AnalysisResult | null
@@ -31,6 +39,7 @@ const props = defineProps<{
   autoEnabled?: boolean
   isAutoAnalyzing?: boolean
   isManualAnalyzing?: boolean
+  questionExchanges?: readonly QuestionExchange[]
 }>()
 
 type MessageSource = 'auto' | 'manual' | 'simulation'
@@ -50,7 +59,27 @@ interface CoachMessage {
   revision: number
   tone: MessageTone
   text: string
+  atMs: number
 }
+
+interface CoachingTimelineEntry extends CoachMessage {
+  kind: 'coaching'
+  key: string
+}
+
+interface QuestionTimelineEntry extends QuestionExchange {
+  kind: 'question'
+  key: string
+  revision: number
+}
+
+type TimelineEntry =
+  | CoachingTimelineEntry
+  | QuestionTimelineEntry
+
+// --------------------------------------------------
+// Coaching history
+// --------------------------------------------------
 
 const messages = ref<CoachMessage[]>([])
 
@@ -62,8 +91,31 @@ const lastDemoReason = ref<InterventionReason | null>(null)
 
 let nextMessageId = 0
 
+function appendMessage(
+  source: MessageSource,
+  revision: number,
+  tone: MessageTone,
+  content: string,
+) {
+  if (!content.trim()) {
+    return
+  }
+
+  messages.value = [
+    {
+      id: ++nextMessageId,
+      source,
+      revision,
+      tone,
+      text: content,
+      atMs: Date.now(),
+    },
+    ...messages.value,
+  ].slice(0, 20)
+}
+
 // --------------------------------------------------
-// Automatic intervention cooldowns
+// Existing automatic intervention policy
 // --------------------------------------------------
 
 const pendingAutoResult = shallowRef<AnalysisResult | null>(null)
@@ -94,35 +146,12 @@ function clearPending(source: PolicySource) {
   getPendingSlot(source).value = null
 }
 
-function appendMessage(
-  source: MessageSource,
-  revision: number,
-  tone: MessageTone,
-  content: string,
-) {
-  if (!content.trim()) {
-    return
-  }
-
-  messages.value = [
-    {
-      id: ++nextMessageId,
-      source,
-      revision,
-      tone,
-      text: content,
-    },
-    ...messages.value,
-  ].slice(0, 20)
-}
-
 function schedulePending(
   result: AnalysisResult,
   source: PolicySource,
   remainingMs: number,
 ) {
   const slot = getPendingSlot(source)
-
   slot.value = result
 
   pendingTimers[source] = setTimeout(() => {
@@ -151,10 +180,6 @@ function schedulePending(
     processPolicyResult(result, source)
   }, remainingMs)
 }
-
-// --------------------------------------------------
-// Automatic coaching uses existing intervention policy
-// --------------------------------------------------
 
 function processPolicyResult(
   result: AnalysisResult,
@@ -192,10 +217,7 @@ function processPolicyResult(
       schedulePending(
         result,
         source,
-        Math.max(
-          1,
-          INTERVENTION_COOLDOWN_MS - elapsed,
-        ),
+        Math.max(1, INTERVENTION_COOLDOWN_MS - elapsed),
       )
     }
 
@@ -224,7 +246,7 @@ function processPolicyResult(
 }
 
 // --------------------------------------------------
-// Manual feedback is delivered immediately
+// Manual feedback is immediate
 // --------------------------------------------------
 
 function selectImportantIssue(
@@ -248,7 +270,6 @@ function publishManualAnalysis(result: AnalysisResult) {
   }
 
   const issue = selectImportantIssue(result)
-
   const parts: string[] = []
 
   if (result.summary.trim()) {
@@ -277,13 +298,9 @@ function publishManualAnalysis(result: AnalysisResult) {
     result.analyzed_revision,
     tone,
     parts.join('\n\n') ||
-      '분석을 완료했습니다. 확인할 구체적인 내용이 없습니다.',
+      '분석을 완료했습니다. 추가로 확인할 내용이 없습니다.',
   )
 }
-
-// --------------------------------------------------
-// Watch automatic and manual analysis results
-// --------------------------------------------------
 
 watch(
   () => props.analysisResult,
@@ -299,8 +316,6 @@ watch(
 watch(
   () => props.manualAnalysisResult,
   (result) => {
-    // Optional props can be undefined or null.
-    // Pass only an actual AnalysisResult.
     if (result !== undefined && result !== null) {
       publishManualAnalysis(result)
     }
@@ -325,7 +340,32 @@ watch(
 )
 
 // --------------------------------------------------
-// Recovery state
+// Unified timeline: coaching + questions
+// --------------------------------------------------
+
+const timeline = computed<TimelineEntry[]>(() => {
+  const coaching: CoachingTimelineEntry[] =
+    messages.value.map((message) => ({
+      ...message,
+      kind: 'coaching',
+      key: `coaching-${message.id}`,
+    }))
+
+  const questions: QuestionTimelineEntry[] =
+    (props.questionExchanges ?? []).map((exchange) => ({
+      ...exchange,
+      kind: 'question',
+      key: `question-${exchange.id}`,
+      revision: exchange.answeredRevision,
+    }))
+
+  return [...coaching, ...questions]
+    .sort((a, b) => b.atMs - a.atMs)
+    .slice(0, 30)
+})
+
+// --------------------------------------------------
+// Issue recovery notice
 // --------------------------------------------------
 
 const recoveryDisplay = computed(() => {
@@ -378,21 +418,21 @@ const recoveryDisplay = computed(() => {
 })
 
 const recoveryTakesPriority = computed(() => {
-  const recovery = props.issueRecovery
+  const notice = props.issueRecovery
 
-  if (!recovery || !recoveryDisplay.value) {
+  if (!notice || !recoveryDisplay.value) {
     return false
   }
 
   if (
-    recovery.phase === 'pending' ||
-    recovery.phase === 'checking' ||
-    recovery.phase === 'failed'
+    notice.phase === 'pending' ||
+    notice.phase === 'checking' ||
+    notice.phase === 'failed'
   ) {
     return true
   }
 
-  const newest = messages.value[0]
+  const newest = timeline.value[0]
 
   return (
     newest === undefined ||
@@ -400,19 +440,23 @@ const recoveryTakesPriority = computed(() => {
   )
 })
 
-const latestMessage = computed(() => {
+const latestEntry = computed<TimelineEntry | null>(() => {
   if (recoveryTakesPriority.value) {
     return null
   }
 
-  return messages.value[0] ?? null
+  return timeline.value[0] ?? null
 })
 
-const previousMessages = computed(() => {
+const previousEntries = computed<TimelineEntry[]>(() => {
   return recoveryTakesPriority.value
-    ? messages.value
-    : messages.value.slice(1)
+    ? timeline.value
+    : timeline.value.slice(1)
 })
+
+// --------------------------------------------------
+// Agent status
+// --------------------------------------------------
 
 const agentStatus = computed(() => {
   if (props.isManualAnalyzing) {
@@ -447,7 +491,7 @@ const agentStatus = computed(() => {
     return '다음 자동 코칭 개입 조건을 확인하고 있습니다.'
   }
 
-  const newest = messages.value[0]
+  const newest = timeline.value[0]
 
   if (
     newest &&
@@ -465,9 +509,8 @@ const agentStatus = computed(() => {
 
 const showDeveloperTools =
   import.meta.env.DEV &&
-  new URLSearchParams(window.location.search).get(
-    'debugCoach',
-  ) === '1'
+  new URLSearchParams(window.location.search)
+    .get('debugCoach') === '1'
 
 function simulateScenario(scenario: DemoScenario) {
   const result: AnalysisResult = {
@@ -512,7 +555,8 @@ function simulateScenario(scenario: DemoScenario) {
       break
 
     case 'stale':
-      result.analyzed_revision = props.currentRevision + 1
+      result.analyzed_revision =
+        props.currentRevision + 1
       result.positive_observation =
         '현재 Revision에 표시되면 안 되는 메시지입니다.'
       break
@@ -575,16 +619,18 @@ onBeforeUnmount(() => {
         }"
         aria-hidden="true"
       />
+
       <span>{{ agentStatus }}</span>
     </div>
 
     <div class="feed-scroll">
       <div class="latest-section">
         <div class="section-heading">
-          <strong>최신 코칭</strong>
+          <strong>최신 대화</strong>
           <span>Revision {{ currentRevision }}</span>
         </div>
 
+        <!-- Recovery takes priority while verification is pending -->
         <article
           v-if="recoveryTakesPriority && recoveryDisplay"
           class="latest-card recovery-card"
@@ -598,47 +644,80 @@ onBeforeUnmount(() => {
           <p>{{ recoveryDisplay.description }}</p>
         </article>
 
+        <!-- Latest question and answer -->
         <article
-          v-else-if="latestMessage"
+          v-else-if="latestEntry?.kind === 'question'"
+          class="latest-card conversation-card"
+        >
+          <div class="latest-meta">
+            <span class="message-label">
+              AI 질문 응답
+            </span>
+
+            <span class="message-revision">
+              Revision {{ latestEntry.answeredRevision }}
+            </span>
+          </div>
+
+          <div class="user-message">
+            <strong>나</strong>
+            <p>{{ latestEntry.question }}</p>
+          </div>
+
+          <div class="assistant-message">
+            <strong>AlgoCoach</strong>
+            <p>{{ latestEntry.answer }}</p>
+          </div>
+
+          <p
+            v-if="latestEntry.revision !== currentRevision"
+            class="historical-note"
+          >
+            이 답변은 이전 코드 Revision을 기준으로 작성됐습니다.
+          </p>
+        </article>
+
+        <!-- Latest automatic or manual feedback -->
+        <article
+          v-else-if="latestEntry?.kind === 'coaching'"
           class="latest-card"
-          :class="latestMessage.tone"
+          :class="latestEntry.tone"
         >
           <div class="latest-meta">
             <span class="message-label">
               {{
-                latestMessage.source === 'manual'
+                latestEntry.source === 'manual'
                   ? '요청한 코드 피드백'
-                  : latestMessage.tone === 'issue'
-                    ? '코드에서 확인할 부분'
+                  : latestEntry.source === 'simulation'
+                    ? '개발용 시뮬레이션'
                     : '자동 코칭'
               }}
             </span>
 
             <span class="message-revision">
-              Revision {{ latestMessage.revision }}
+              Revision {{ latestEntry.revision }}
             </span>
           </div>
 
           <p class="message-body">
-            {{ latestMessage.text }}
+            {{ latestEntry.text }}
           </p>
 
           <p
             v-if="
               issueRecovery?.phase === 'cleared' &&
-              issueRecovery.checkedRevision === latestMessage.revision
+              issueRecovery.checkedRevision === latestEntry.revision
             "
             class="historical-note"
           >
-            이전에 지적한 경고는 최신 분석에서
-            재발견되지 않았습니다.
+            이전 경고는 최신 분석에서 재발견되지 않았습니다.
           </p>
 
           <p
-            v-if="latestMessage.revision !== currentRevision"
+            v-if="latestEntry.revision !== currentRevision"
             class="historical-note"
           >
-            이전 코드 Revision에서 받은 피드백입니다.
+            이전 코드에 대한 피드백입니다.
           </p>
         </article>
 
@@ -647,10 +726,7 @@ onBeforeUnmount(() => {
           class="latest-card recovery-card"
           :class="`recovery-${recoveryDisplay.tone}`"
         >
-          <span class="message-label">
-            재검증 결과
-          </span>
-
+          <span class="message-label">재검증 결과</span>
           <h3>{{ recoveryDisplay.title }}</h3>
           <p>{{ recoveryDisplay.description }}</p>
         </article>
@@ -662,64 +738,83 @@ onBeforeUnmount(() => {
           <strong>아직 전달할 코칭이 없습니다.</strong>
 
           <p>
-            코드를 분석해 구체적인 지도 근거가 확인되면
-            이곳에 최신 피드백이 표시됩니다.
+            자동 분석, 수동 피드백 또는 질문에 대한
+            AI 응답이 이곳에 표시됩니다.
           </p>
         </div>
       </div>
 
+      <!-- Older coaching and conversations -->
       <section
-        v-if="previousMessages.length"
+        v-if="previousEntries.length > 0"
         class="history-section"
       >
         <div class="section-heading">
-          <strong>이전 코칭</strong>
-          <span>{{ previousMessages.length }}개</span>
+          <strong>이전 기록</strong>
+          <span>{{ previousEntries.length }}개</span>
         </div>
 
         <div class="history-list">
           <article
-            v-for="message in previousMessages"
-            :key="message.id"
+            v-for="entry in previousEntries"
+            :key="entry.key"
             class="history-card"
-            :class="message.tone"
+            :class="entry.kind === 'coaching' ? entry.tone : 'question'"
           >
-            <div class="history-meta">
-              <strong>
-                {{
-                  message.source === 'manual'
-                    ? '요청한 피드백'
-                    : message.source === 'simulation'
-                      ? '개발용 시뮬레이션'
-                      : '자동 코칭'
-                }}
-              </strong>
+            <template v-if="entry.kind === 'question'">
+              <div class="history-meta">
+                <strong>AI 질문 응답</strong>
 
-              <span>
-                Revision {{ message.revision }}
-              </span>
-            </div>
+                <span>
+                  Revision {{ entry.answeredRevision }}
+                </span>
+              </div>
 
-            <p class="message-body">
-              {{ message.text }}
-            </p>
+              <p class="history-question">
+                <strong>나:</strong> {{ entry.question }}
+              </p>
+
+              <p class="message-body">
+                <strong>AlgoCoach:</strong> {{ entry.answer }}
+              </p>
+            </template>
+
+            <template v-else>
+              <div class="history-meta">
+                <strong>
+                  {{
+                    entry.source === 'manual'
+                      ? '요청한 피드백'
+                      : entry.source === 'simulation'
+                        ? '개발용 시뮬레이션'
+                        : '자동 코칭'
+                  }}
+                </strong>
+
+                <span>Revision {{ entry.revision }}</span>
+              </div>
+
+              <p class="message-body">
+                {{ entry.text }}
+              </p>
+
+              <p
+                v-if="
+                  entry.tone === 'issue' &&
+                  issueRecovery?.originRevision === entry.revision &&
+                  issueRecovery.phase === 'cleared'
+                "
+                class="historical-note"
+              >
+                최신 분석에서는 이 경고가 재발견되지 않았습니다.
+              </p>
+            </template>
 
             <p
-              v-if="
-                message.tone === 'issue' &&
-                issueRecovery?.originRevision === message.revision &&
-                issueRecovery.phase === 'cleared'
-              "
+              v-if="entry.revision !== currentRevision"
               class="historical-note"
             >
-              최신 분석에서는 이 경고가 재발견되지 않았습니다.
-            </p>
-
-            <p
-              v-else-if="message.revision !== currentRevision"
-              class="historical-note"
-            >
-              이전 코드에 대한 코칭입니다.
+              이전 코드 Revision의 기록입니다.
             </p>
           </article>
         </div>
@@ -731,9 +826,7 @@ onBeforeUnmount(() => {
       >
         <summary>개발용 코칭 시뮬레이션</summary>
 
-        <p>
-          실제 LLM을 호출하지 않습니다.
-        </p>
+        <p>실제 LLM을 호출하지 않습니다.</p>
 
         <div class="simulation-buttons">
           <button
@@ -976,6 +1069,43 @@ onBeforeUnmount(() => {
   background: #fff7ed;
 }
 
+.conversation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-message,
+.assistant-message {
+  padding: 11px;
+  border-radius: 9px;
+}
+
+.user-message {
+  background: white;
+  border: 1px solid #dbeafe;
+}
+
+.assistant-message {
+  background: #dbeafe;
+}
+
+.user-message strong,
+.assistant-message strong {
+  color: #1e40af;
+  font-size: 11px;
+}
+
+.user-message p,
+.assistant-message p {
+  margin: 6px 0 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .message-label {
   color: #1d4ed8;
   font-size: 11px;
@@ -1030,6 +1160,14 @@ onBeforeUnmount(() => {
 .history-card .message-body {
   color: #475569;
   font-size: 12px;
+}
+
+.history-question {
+  margin: 10px 0 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
 }
 
 .historical-note {

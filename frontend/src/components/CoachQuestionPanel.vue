@@ -5,6 +5,7 @@ import {
   askCoachingQuestion,
   type CoachingConversationTurn,
 } from '@/services/coaching-question'
+
 import type { ProgrammingLanguage } from '@/types/programming-language'
 
 const props = defineProps<{
@@ -21,7 +22,12 @@ interface Exchange {
   question: string
   answer: string
   answeredRevision: number
+  atMs: number
 }
+
+const emit = defineEmits<{
+  answered: [exchange: Exchange]
+}>()
 
 const isOpen = ref(false)
 const isSending = ref(false)
@@ -55,10 +61,10 @@ function recentHistory(): CoachingConversationTurn[] {
 async function submitQuestion() {
   const text = question.value.trim()
 
-  if (!text || isSending.value) return
+  if (!text || isSending.value) {
+    return
+  }
 
-  // Snapshot: the question must be associated
-  // with the code that existed when it was sent.
   const request = {
     session_id: props.sessionId,
     code_revision: props.currentRevision,
@@ -70,42 +76,50 @@ async function submitQuestion() {
     history: recentHistory(),
   }
 
-  const active = new AbortController()
+  const activeController = new AbortController()
 
-  controller = active
+  controller = activeController
   isSending.value = true
   errorMessage.value = ''
 
   try {
     const result = await askCoachingQuestion(
       request,
-      active.signal,
+      activeController.signal,
     )
 
     if (
-      active.signal.aborted ||
-      controller !== active
+      activeController.signal.aborted ||
+      controller !== activeController
     ) {
       return
     }
 
+    const exchange: Exchange = {
+      id: ++nextExchangeId,
+      question: text,
+      answer: result.answer,
+      answeredRevision: result.answered_revision,
+      atMs: Date.now(),
+    }
+
+    // Keep conversation context locally for the next request.
     exchanges.value = [
-      {
-        id: ++nextExchangeId,
-        question: text,
-        answer: result.answer,
-        answeredRevision: result.answered_revision,
-      },
+      exchange,
       ...exchanges.value,
     ].slice(0, 20)
+
+    // The parent forwards the completed exchange
+    // to the shared AlgoCoach conversation feed.
+    emit('answered', exchange)
 
     if (question.value.trim() === text) {
       question.value = ''
     }
   } catch (error) {
     if (
-      active.signal.aborted ||
-      controller !== active
+      activeController.signal.aborted ||
+      controller !== activeController
     ) {
       return
     }
@@ -115,7 +129,7 @@ async function submitQuestion() {
         ? error.message
         : 'AI에게 질문하는 중 오류가 발생했습니다.'
   } finally {
-    if (controller === active) {
+    if (controller === activeController) {
       controller = null
       isSending.value = false
     }
@@ -140,7 +154,10 @@ onBeforeUnmount(() => {
       @click="togglePanel"
     >
       <span>AI에게 질문하기</span>
-      <span aria-hidden="true">{{ isOpen ? '−' : '+' }}</span>
+
+      <span aria-hidden="true">
+        {{ isOpen ? '−' : '+' }}
+      </span>
     </button>
 
     <div
@@ -148,8 +165,8 @@ onBeforeUnmount(() => {
       class="question-content"
     >
       <p class="helper-text">
-        문제나 현재 코드, 이전 코칭 내용에 관해 질문해 보세요.
-        답변은 질문 당시 코드 기준으로 작성됩니다.
+        문제, 현재 코드, 이전 코칭에 관해 자유롭게 질문하세요.
+        AI 답변은 위쪽 AlgoCoach 대화 피드에 표시됩니다.
       </p>
 
       <form
@@ -176,7 +193,7 @@ onBeforeUnmount(() => {
         >
           {{
             isSending
-              ? '답변 생성 중...'
+              ? 'AI 답변 생성 중...'
               : '질문 보내기'
           }}
         </button>
@@ -187,7 +204,7 @@ onBeforeUnmount(() => {
         class="waiting"
         role="status"
       >
-        AI가 현재 코드와 질문 내용을 확인하고 있습니다.
+        현재 코드와 질문을 바탕으로 답변을 생성하고 있습니다.
       </p>
 
       <p
@@ -198,40 +215,12 @@ onBeforeUnmount(() => {
         {{ errorMessage }}
       </p>
 
-      <div
-        v-if="exchanges.length"
-        class="conversation"
-        aria-live="polite"
+      <p
+        v-if="exchanges.length > 0"
+        class="history-note"
       >
-        <h3>질문과 답변</h3>
-
-        <article
-          v-for="entry in exchanges"
-          :key="entry.id"
-          class="exchange"
-        >
-          <p class="user-question">
-            <strong>질문</strong>
-            {{ entry.question }}
-          </p>
-
-          <div class="agent-answer">
-            <strong>
-              AlgoCoach · Revision {{ entry.answeredRevision }}
-            </strong>
-
-            <p>{{ entry.answer }}</p>
-
-            <p
-              v-if="entry.answeredRevision !== currentRevision"
-              class="outdated-note"
-            >
-              이후 코드가 변경됐습니다.
-              이 답변은 현재 코드의 재검증 결과가 아닙니다.
-            </p>
-          </div>
-        </article>
-      </div>
+        질문 {{ exchanges.length }}건 · 답변은 위 대화 피드에서 확인
+      </p>
     </div>
   </section>
 </template>
@@ -270,7 +259,8 @@ onBeforeUnmount(() => {
   padding: 14px;
 }
 
-.helper-text {
+.helper-text,
+.history-note {
   margin: 0;
   color: #64748b;
   font-size: 12px;
@@ -283,9 +273,7 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.question-form label,
-.conversation h3 {
-  margin: 0;
+.question-form label {
   color: #334155;
   font-size: 12px;
   font-weight: 700;
@@ -327,6 +315,7 @@ onBeforeUnmount(() => {
   margin: 0;
   color: #1d4ed8;
   font-size: 12px;
+  line-height: 1.7;
 }
 
 .error {
@@ -334,49 +323,5 @@ onBeforeUnmount(() => {
   color: #b91c1c;
   font-size: 12px;
   line-height: 1.7;
-}
-
-.conversation {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-}
-
-.exchange {
-  padding: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 9px;
-  background: #f8fafc;
-}
-
-.user-question,
-.agent-answer p {
-  margin: 0;
-  color: #334155;
-  font-size: 12px;
-  line-height: 1.8;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.agent-answer {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 10px;
-  padding: 11px;
-  border-radius: 8px;
-  background: #eff6ff;
-}
-
-.agent-answer strong {
-  color: #1e40af;
-  font-size: 11px;
-}
-
-.agent-answer .outdated-note {
-  color: #92400e;
-  font-size: 11px;
 }
 </style>
