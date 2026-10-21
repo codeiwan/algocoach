@@ -7,6 +7,8 @@ import {
   watch,
 } from 'vue'
 
+import CoachMarkdownText from '@/components/CoachMarkdownText.vue'
+
 import {
   INTERVENTION_COOLDOWN_MS,
   evaluateIntervention,
@@ -31,6 +33,8 @@ interface QuestionExchange {
   atMs: number
 }
 
+type ObservationPhase = 'waiting' | 'editing' | 'settled'
+
 const props = defineProps<{
   analysisResult: AnalysisResult | null
   manualAnalysisResult?: AnalysisResult | null
@@ -39,6 +43,11 @@ const props = defineProps<{
   autoEnabled?: boolean
   isAutoAnalyzing?: boolean
   isManualAnalyzing?: boolean
+  isQuestionAnswering?: boolean
+  observationPhase?: ObservationPhase
+  autoAnalysisLimitReached?: boolean
+  autoAnalysisError?: string
+  manualAnalysisError?: string
   questionExchanges?: readonly QuestionExchange[]
 }>()
 
@@ -217,7 +226,10 @@ function processPolicyResult(
       schedulePending(
         result,
         source,
-        Math.max(1, INTERVENTION_COOLDOWN_MS - elapsed),
+        Math.max(
+          1,
+          INTERVENTION_COOLDOWN_MS - elapsed,
+        ),
       )
     }
 
@@ -246,7 +258,7 @@ function processPolicyResult(
 }
 
 // --------------------------------------------------
-// Manual feedback is immediate
+// Manual feedback: immediate delivery
 // --------------------------------------------------
 
 function selectImportantIssue(
@@ -298,7 +310,7 @@ function publishManualAnalysis(result: AnalysisResult) {
     result.analyzed_revision,
     tone,
     parts.join('\n\n') ||
-      '분석을 완료했습니다. 추가로 확인할 내용이 없습니다.',
+      '분석이 완료됐지만 추가로 전달할 구체적인 내용은 없습니다.',
   )
 }
 
@@ -340,7 +352,7 @@ watch(
 )
 
 // --------------------------------------------------
-// Unified timeline: coaching + questions
+// Unified coaching and question timeline
 // --------------------------------------------------
 
 const timeline = computed<TimelineEntry[]>(() => {
@@ -365,7 +377,7 @@ const timeline = computed<TimelineEntry[]>(() => {
 })
 
 // --------------------------------------------------
-// Issue recovery notice
+// Issue recovery
 // --------------------------------------------------
 
 const recoveryDisplay = computed(() => {
@@ -455,56 +467,106 @@ const previousEntries = computed<TimelineEntry[]>(() => {
 })
 
 // --------------------------------------------------
-// Agent status
+// Actual API and editor activity
 // --------------------------------------------------
 
+const agentBusy = computed(() => {
+  return Boolean(
+    props.isQuestionAnswering ||
+    props.isManualAnalyzing ||
+    props.isAutoAnalyzing,
+  )
+})
+
 const agentStatus = computed(() => {
+  if (props.isQuestionAnswering) {
+    return 'AI가 질문에 대한 답변을 생성하고 있습니다.'
+  }
+
   if (props.isManualAnalyzing) {
-    return '요청한 코드 피드백을 생성하고 있습니다.'
+    return '요청한 코드 피드백의 AI 응답을 기다리고 있습니다.'
   }
 
   if (props.isAutoAnalyzing) {
-    return '현재 코드의 자동 AI 분석 응답을 기다리고 있습니다.'
+    return '자동 AI 코드 분석 응답을 기다리고 있습니다.'
   }
 
   if (props.issueRecovery?.phase === 'checking') {
-    return '수정한 코드의 재검증 결과를 기다리고 있습니다.'
+    return '수정한 코드의 AI 재검증 결과를 기다리고 있습니다.'
   }
 
   if (props.issueRecovery?.phase === 'pending') {
-    return '코드 수정 확인 · 재검증 대기'
+    return '기존 경고 위치의 수정 감지 · 재검증 대기'
+  }
+
+  if (props.observationPhase === 'editing') {
+    return '코드 변경 감지 · 입력이 안정되기를 기다립니다.'
   }
 
   if (props.issueRecovery?.phase === 'failed') {
-    return '재검증 실패 · 다시 시도 가능'
+    return '코드 재검증 실패 · 다시 피드백을 요청할 수 있습니다.'
+  }
+
+  if (props.manualAnalysisError) {
+    return '요청한 코드 분석에 실패했습니다.'
+  }
+
+  if (props.autoAnalysisError) {
+    return '자동 코드 분석에 실패했습니다.'
   }
 
   if (props.issueRecovery?.phase === 'cleared') {
-    return '최신 코드 재검증 완료'
+    return '수정한 코드 재검증 완료 · 최신 결과를 확인하세요.'
+  }
+
+  if (props.issueRecovery?.phase === 'issues_found') {
+    return '수정한 코드 분석 완료 · 추가 검토 사항이 있습니다.'
+  }
+
+  const newest = timeline.value[0]
+
+  if (
+    newest?.kind === 'question' &&
+    newest.revision === props.currentRevision
+  ) {
+    return 'AI 질문 답변이 도착했습니다.'
+  }
+
+  if (
+    props.manualAnalysisResult?.analyzed_revision ===
+    props.currentRevision
+  ) {
+    return '요청한 코드 피드백이 도착했습니다.'
+  }
+
+  if (
+    props.analysisResult?.analyzed_revision ===
+    props.currentRevision
+  ) {
+    return '자동 코드 분석이 완료됐습니다.'
+  }
+
+  if (props.observationPhase === 'settled') {
+    if (!props.autoEnabled) {
+      return '입력 안정 · 자동 코칭 OFF'
+    }
+
+    if (props.autoAnalysisLimitReached) {
+      return '자동 분석 한도 도달 · 수동 피드백 이용 가능'
+    }
+
+    return '코드 입력 안정 · 추가 수정 또는 분석 요청 대기'
   }
 
   if (!props.autoEnabled) {
     return '자동 코칭 OFF · 수동 피드백 이용 가능'
   }
 
-  if (pendingAutoResult.value !== null) {
-    return '다음 자동 코칭 개입 조건을 확인하고 있습니다.'
-  }
-
-  const newest = timeline.value[0]
-
-  if (
-    newest &&
-    newest.revision !== props.currentRevision
-  ) {
-    return '코드가 변경되어 새 분석 결과를 기다립니다.'
-  }
-
-  return '코드를 관찰하고 있습니다.'
+  return '코드 입력과 분석 요청을 기다리고 있습니다.'
 })
 
 // --------------------------------------------------
-// Developer-only simulation
+// Development simulation
 // --------------------------------------------------
 
 const showDeveloperTools =
@@ -528,8 +590,10 @@ function simulateScenario(scenario: DemoScenario) {
       result.issues = [{
         category: 'logic',
         severity: 'WARNING',
-        description: '방문 처리 누락 가능성이 있습니다.',
-        evidence: '개발용 테스트 경고입니다.',
+        description:
+          '반복문에서 **누적해야 할 값**을 확인하세요.',
+        evidence:
+          '현재 `answer += 1`을 사용하고 있습니다.',
         line_start: 5,
         line_end: 5,
       }]
@@ -548,7 +612,7 @@ function simulateScenario(scenario: DemoScenario) {
 
     case 'praise':
       result.positive_observation =
-        '중복 계산을 줄이는 접근이 확인됐습니다.'
+        '**누적 로직**에서 `answer += i`를 사용했습니다.'
       break
 
     case 'no_signal':
@@ -614,9 +678,7 @@ onBeforeUnmount(() => {
     >
       <span
         class="status-pulse"
-        :class="{
-          busy: isManualAnalyzing || isAutoAnalyzing,
-        }"
+        :class="{ busy: agentBusy }"
         aria-hidden="true"
       />
 
@@ -630,7 +692,7 @@ onBeforeUnmount(() => {
           <span>Revision {{ currentRevision }}</span>
         </div>
 
-        <!-- Recovery takes priority while verification is pending -->
+        <!-- Pending issue recovery -->
         <article
           v-if="recoveryTakesPriority && recoveryDisplay"
           class="latest-card recovery-card"
@@ -650,10 +712,7 @@ onBeforeUnmount(() => {
           class="latest-card conversation-card"
         >
           <div class="latest-meta">
-            <span class="message-label">
-              AI 질문 응답
-            </span>
-
+            <span class="message-label">AI 질문 응답</span>
             <span class="message-revision">
               Revision {{ latestEntry.answeredRevision }}
             </span>
@@ -661,12 +720,22 @@ onBeforeUnmount(() => {
 
           <div class="user-message">
             <strong>나</strong>
-            <p>{{ latestEntry.question }}</p>
+
+            <p>
+              <CoachMarkdownText
+                :text="latestEntry.question"
+              />
+            </p>
           </div>
 
           <div class="assistant-message">
             <strong>AlgoCoach</strong>
-            <p>{{ latestEntry.answer }}</p>
+
+            <p>
+              <CoachMarkdownText
+                :text="latestEntry.answer"
+              />
+            </p>
           </div>
 
           <p
@@ -677,7 +746,7 @@ onBeforeUnmount(() => {
           </p>
         </article>
 
-        <!-- Latest automatic or manual feedback -->
+        <!-- Latest automatic or manual coaching -->
         <article
           v-else-if="latestEntry?.kind === 'coaching'"
           class="latest-card"
@@ -700,7 +769,9 @@ onBeforeUnmount(() => {
           </div>
 
           <p class="message-body">
-            {{ latestEntry.text }}
+            <CoachMarkdownText
+              :text="latestEntry.text"
+            />
           </p>
 
           <p
@@ -721,6 +792,7 @@ onBeforeUnmount(() => {
           </p>
         </article>
 
+        <!-- Recovery without a current coaching message -->
         <article
           v-else-if="recoveryDisplay"
           class="latest-card recovery-card"
@@ -744,7 +816,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- Older coaching and conversations -->
+      <!-- Previous conversations and coaching -->
       <section
         v-if="previousEntries.length > 0"
         class="history-section"
@@ -759,7 +831,11 @@ onBeforeUnmount(() => {
             v-for="entry in previousEntries"
             :key="entry.key"
             class="history-card"
-            :class="entry.kind === 'coaching' ? entry.tone : 'question'"
+            :class="
+              entry.kind === 'coaching'
+                ? entry.tone
+                : 'question'
+            "
           >
             <template v-if="entry.kind === 'question'">
               <div class="history-meta">
@@ -771,11 +847,17 @@ onBeforeUnmount(() => {
               </div>
 
               <p class="history-question">
-                <strong>나:</strong> {{ entry.question }}
+                <strong>나:</strong>
+                <CoachMarkdownText
+                  :text="entry.question"
+                />
               </p>
 
               <p class="message-body">
-                <strong>AlgoCoach:</strong> {{ entry.answer }}
+                <strong>AlgoCoach:</strong>
+                <CoachMarkdownText
+                  :text="entry.answer"
+                />
               </p>
             </template>
 
@@ -795,7 +877,9 @@ onBeforeUnmount(() => {
               </div>
 
               <p class="message-body">
-                {{ entry.text }}
+                <CoachMarkdownText
+                  :text="entry.text"
+                />
               </p>
 
               <p
