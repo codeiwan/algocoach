@@ -1,93 +1,167 @@
 /*
  * AlgoCoach Agent Experience
  *
- * Presentation-only refinements for the right panel.
- * The existing AI APIs, state and intervention policy
- * are not changed.
+ * The right panel is divided into:
+ *
+ * 1. Fixed agent header and live status.
+ * 2. Independently scrolling coaching messages.
+ * 3. Bottom interaction controls.
+ *
+ * No LLM requests are initiated from this stylesheet.
  */
 
-/* The agent card already identifies the coach.
-   Hide the redundant "AI Coach / LLM" panel title. */
+/* --------------------------------------------------
+   Right panel layout
+-------------------------------------------------- */
 
 #app .coach-panel > .panel-header {
   display: none;
 }
 
-/* Keep the right panel independently scrollable. */
-
 #app .coach-panel > .coach-content {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
-  gap: 13px;
+  gap: 10px;
+
+  min-width: 0;
   min-height: 0;
-  padding: 13px;
+
+  padding: 12px;
+
+  overflow: hidden;
 }
 
-/* Show the actual agent and latest feedback first. */
+/* --------------------------------------------------
+   Agent feed
+-------------------------------------------------- */
 
 #app .coach-panel .coach-content > .coach-feedback {
-  order: -3;
+  order: 0;
+
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+
+  min-width: 0;
+  min-height: 0;
+
+  overflow: hidden;
+}
+
+#app .coach-panel .coach-feedback > .agent-header,
+#app .coach-panel .coach-feedback > .agent-status {
   flex: 0 0 auto;
 }
 
-/* Retain the existing automatic-analysis toggle.
-   It remains OFF by default until Stage 5.7. */
+#app .coach-panel .coach-feedback > .feed-scroll {
+  flex: 1 1 0;
 
-#app .coach-panel .coach-content > .control-card {
-  order: -2;
+  min-width: 0;
+  min-height: 0;
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  overscroll-behavior: contain;
+
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+/* --------------------------------------------------
+   Bottom action dock
+-------------------------------------------------- */
+
+#app .coach-panel .coach-content > .coach-action-dock {
+  order: 1;
+
+  display: flex;
   flex: 0 0 auto;
-  padding: 12px;
-  border-color: #e2e8f0;
-  background: #fff;
+  flex-direction: column;
+
+  gap: 9px;
+
+  min-width: 0;
+  min-height: 0;
+  max-height: 55%;
+
+  padding-top: 10px;
+
+  border-top: 1px solid #e2e8f0;
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  overscroll-behavior: contain;
+
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
 }
 
-#app .coach-panel .coach-content > .control-card h3 {
-  font-size: 12px;
-}
-
-#app .coach-panel .coach-content > .control-card .control-description {
-  display: none;
-}
-
-#app .coach-panel .coach-content > .control-card .usage-count {
-  margin-top: 9px !important;
-  color: #64748b;
-  font-size: 11px;
-}
-
-/* Hide developer-only observations from the learner.
-   The composables and data tracking continue to run. */
-
-#app .coach-panel .coach-content > .observation-card {
-  display: none;
-}
-
-/* Keep actual hint, review, and manual analysis tools
-   available until the interaction redesign in Stage 5.7. */
-
-#app .coach-panel .coach-content > .analyze-button {
+#app .coach-panel .coach-action-dock > * {
   flex-shrink: 0;
-}
-
-#app .coach-panel .coach-content > .feedback-card {
-  flex-shrink: 0;
-}
-
-/* Remove the redundant manual-analysis placeholder.
-   The real result and real errors still appear. */
-
-#app .coach-panel .coach-content > .empty-state {
-  display: none;
-}
-
-/* Long model messages must wrap without growing
-   the panel beyond its available width. */
-
-#app .coach-panel .coach-content > * {
   min-width: 0;
 }
 
+/* When question history becomes long, scroll within
+   its own section instead of expanding the viewport. */
+
+#app .coach-panel .coach-action-dock .question-panel {
+  max-height: min(40dvh, 380px);
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  scrollbar-width: thin;
+}
+
+/* Preserve hint/review tools without allowing them
+   to consume the entire agent panel height. */
+
+#app .coach-panel .secondary-tools[open] {
+  max-height: min(35dvh, 320px);
+
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+#app .coach-panel .secondary-tool-content > * {
+  min-width: 0;
+}
+
+/* --------------------------------------------------
+   Text wrapping and compatibility
+-------------------------------------------------- */
+
 #app .coach-panel .coach-content p,
-#app .coach-panel .coach-content li {
+#app .coach-panel .coach-content li,
+#app .coach-panel .coach-content button,
+#app .coach-panel .coach-content textarea {
   overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------
+   Responsive layout
+-------------------------------------------------- */
+
+@media (max-width: 1050px) {
+  #app .coach-panel .coach-content > .coach-action-dock {
+    max-height: 50%;
+  }
+
+  #app .coach-panel .coach-action-dock .question-panel {
+    max-height: 30dvh;
+  }
+}
+
+@media (max-width: 600px) {
+  #app .coach-panel > .coach-content {
+    padding: 10px;
+    gap: 8px;
+  }
+
+  #app .coach-panel .coach-content > .coach-action-dock {
+    padding-top: 8px;
+  }
 }

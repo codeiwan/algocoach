@@ -137,7 +137,9 @@ const errorMessage = ref('')
 
 const MAX_AUTO_ANALYSES = 3
 
-const autoAnalysisEnabled = ref(false)
+// Stage 5.7C: automatic coaching is enabled by default.
+// The existing call cap remains in force.
+const autoAnalysisEnabled = ref(true)
 const autoAnalysisCalls = ref(0)
 
 const isAutoAnalyzing = ref(false)
@@ -167,13 +169,15 @@ const stableSnapshot = ref<CodeSnapshot | null>(null)
 const triggerDecision = ref<TriggerDecision | null>(null)
 const lastSuggestion = ref<TriggerSuggestion | null>(null)
 
-/** The last analysis which reported concrete source-line issues. */
 interface ReportedIssueSnapshot {
   snapshot: CodeSnapshot
   issues: AnalysisResult['issues']
 }
 
-const lastReportedIssues = ref<ReportedIssueSnapshot | null>(null)
+const lastReportedIssues = ref<ReportedIssueSnapshot | null>(
+  null,
+)
+
 const issueRecovery = ref<IssueRecoveryNotice | null>(null)
 
 function editedReportedIssue(snapshot: CodeSnapshot): boolean {
@@ -227,7 +231,10 @@ function markIssueCheckFailure(snapshot: CodeSnapshot) {
     snapshot.language === selectedLanguage.value &&
     snapshot.code === currentCode.value
   ) {
-    issueRecovery.value = { ...notice, phase: 'failed' }
+    issueRecovery.value = {
+      ...notice,
+      phase: 'failed',
+    }
   }
 }
 
@@ -247,13 +254,20 @@ function acceptFreshAnalysis(
     issueRecovery.value = {
       originRevision: notice.originRevision,
       checkedRevision: snapshot.revision,
-      phase: result.issues.length === 0 ? 'cleared' : 'issues_found',
+      phase:
+        result.issues.length === 0
+          ? 'cleared'
+          : 'issues_found',
     }
   }
 
-  lastReportedIssues.value = result.issues.length > 0
-    ? { snapshot, issues: result.issues }
-    : null
+  lastReportedIssues.value =
+    result.issues.length > 0
+      ? {
+          snapshot,
+          issues: result.issues,
+        }
+      : null
 }
 
 let observationTimer: ReturnType<typeof setTimeout> | null = null
@@ -272,7 +286,7 @@ const observationStatusText = computed(() => {
 })
 
 // --------------------------------------------------
-// Idle detection and code history
+// Existing observation and history composables
 // --------------------------------------------------
 
 const { isIdle, idleStatusText } = useIdleDetection(
@@ -283,6 +297,36 @@ const { isIdle, idleStatusText } = useIdleDetection(
 const { history, latestEntry } = useCodeHistory(
   stableSnapshot,
 )
+
+// Developer diagnostics are available only on request.
+// The learner's normal screen has no observation dashboard.
+const showDeveloperMonitor =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get(
+    'debugCoach',
+  ) === '1'
+
+// --------------------------------------------------
+// Coaching context for AI questions
+// --------------------------------------------------
+
+const latestCoachingText = computed<string | null>(() => {
+  if (
+    analysisResult.value?.analyzed_revision ===
+    codeRevision.value
+  ) {
+    return analysisResult.value.summary
+  }
+
+  if (
+    autoAnalysisResult.value?.analyzed_revision ===
+    codeRevision.value
+  ) {
+    return autoAnalysisResult.value.summary
+  }
+
+  return null
+})
 
 // --------------------------------------------------
 // Analysis trigger policy
@@ -320,6 +364,7 @@ function considerAutomaticAnalysis(
 
   if (
     isAnalyzing.value ||
+    isAutoAnalyzing.value ||
     autoAnalysisLimitReached.value
   ) {
     return
@@ -334,7 +379,7 @@ function considerAutomaticAnalysis(
 }
 
 // --------------------------------------------------
-// Code change detection
+// Code changes
 // --------------------------------------------------
 
 watch([selectedLanguage, currentCode], () => {
@@ -391,7 +436,7 @@ watch([selectedLanguage, currentCode], () => {
 })
 
 // --------------------------------------------------
-// Automatic analysis toggle
+// Automatic analysis ON / OFF
 // --------------------------------------------------
 
 watch(autoAnalysisEnabled, (enabled) => {
@@ -409,6 +454,7 @@ watch(autoAnalysisEnabled, (enabled) => {
         phase: 'pending',
       }
     }
+
     return
   }
 
@@ -430,14 +476,15 @@ watch(autoAnalysisEnabled, (enabled) => {
 })
 
 // --------------------------------------------------
-// Manual analysis
+// Manual analysis: immediate learner-requested feedback
 // --------------------------------------------------
 
 async function runAnalysis() {
   if (
     completionOutcome.value !== null ||
     isAnalyzing.value ||
-    isAutoAnalyzing.value
+    isAutoAnalyzing.value ||
+    !currentCode.value.trim()
   ) {
     return
   }
@@ -453,6 +500,7 @@ async function runAnalysis() {
   }
 
   markIssueChecking(snapshot)
+
   isAnalyzing.value = true
   analysisResult.value = null
   errorMessage.value = ''
@@ -476,7 +524,7 @@ async function runAnalysis() {
       languageSnapshot !== selectedLanguage.value
     ) {
       errorMessage.value =
-        '분석 중 코드 또는 언어가 변경되었습니다. 다시 분석해 주세요.'
+        '분석 중 코드가 변경되었습니다. 현재 코드로 다시 요청해 주세요.'
       return
     }
 
@@ -487,6 +535,9 @@ async function runAnalysis() {
     }
 
     acceptFreshAnalysis(snapshot, result)
+
+    // CoachInterventionPanel receives this result and shows
+    // it immediately without the automatic 60-second cooldown.
     analysisResult.value = result
   } catch (error) {
     markIssueCheckFailure(snapshot)
@@ -515,6 +566,7 @@ async function runAutomaticAnalysis(
     completionOutcome.value !== null ||
     !autoAnalysisEnabled.value ||
     isAnalyzing.value ||
+    isAutoAnalyzing.value ||
     autoAnalysisLimitReached.value
   ) {
     return
@@ -561,11 +613,9 @@ async function runAutomaticAnalysis(
       return
     }
 
-    if (
-      result.analyzed_revision !== snapshot.revision
-    ) {
+    if (result.analyzed_revision !== snapshot.revision) {
       throw new Error(
-        '자동 분석 결과의 Revision이 일치하지 않습니다.',
+        '자동 분석 결과의 코드 Revision이 일치하지 않습니다.',
       )
     }
 
@@ -580,9 +630,7 @@ async function runAutomaticAnalysis(
       return
     }
 
-    if (
-      lastSuggestion.value?.snapshot === snapshot
-    ) {
+    if (lastSuggestion.value?.snapshot === snapshot) {
       lastSuggestion.value = null
     }
 
@@ -601,7 +649,7 @@ async function runAutomaticAnalysis(
 }
 
 // --------------------------------------------------
-// Feedback persistence after completion
+// Feedback persistence
 // --------------------------------------------------
 
 async function saveCoachingFeedback(
@@ -736,7 +784,7 @@ function returnToProblemInput() {
 </script>
 
 <template>
-  <!-- Completed Session -->
+  <!-- Completed session -->
   <div
     v-if="completionOutcome"
     class="completion-page"
@@ -750,8 +798,8 @@ function returnToProblemInput() {
 
       <p class="completion-description">
         풀이 종료 기록이 서버에 접수됐습니다.
-        아래 내용은 종료 당시의 코드와
-        사용자가 직접 보고한 채점 결과입니다.
+        다음 정보는 사용자가 입력한 외부 채점 결과와
+        종료 당시 코드입니다.
       </p>
 
       <div class="completion-meta">
@@ -759,8 +807,8 @@ function returnToProblemInput() {
           <span>종료 방식</span>
           <strong>
             {{
-              completionOutcome.receipt.completion_mode
-                === 'EXTERNAL_JUDGE'
+              completionOutcome.receipt.completion_mode ===
+              'EXTERNAL_JUDGE'
                 ? '외부 채점 결과 기록'
                 : '제출 없이 종료'
             }}
@@ -818,19 +866,21 @@ function returnToProblemInput() {
       </div>
 
       <div
-        v-if="completionOutcome.receipt.verdict_source === 'USER_REPORTED'"
+        v-if="
+          completionOutcome.receipt.verdict_source ===
+          'USER_REPORTED'
+        "
         class="verdict-notice"
       >
-        이 채점 결과는 외부 사이트에서 확인하여
-        직접 입력한 정보입니다.
-        AlgoCoach가 실행하거나 채점한 결과는 아닙니다.
+        외부 채점 결과는 사용자가 보고한 정보입니다.
+        AlgoCoach가 직접 코드를 실행하거나 채점하지 않았습니다.
       </div>
 
       <div
         v-else
         class="verdict-notice"
       >
-        이번 풀이에는 외부 채점 결과가 기록되지 않았습니다.
+        외부 채점 결과가 기록되지 않았습니다.
       </div>
 
       <section
@@ -839,11 +889,13 @@ function returnToProblemInput() {
         aria-live="polite"
       >
         <h2>AI 코칭 평가</h2>
-
         <p>{{ feedbackStatusLabel }}</p>
 
         <p
-          v-if="feedbackSaveStatus === 'saved' && feedbackReceipt"
+          v-if="
+            feedbackSaveStatus === 'saved' &&
+            feedbackReceipt
+          "
           class="feedback-time"
         >
           기록 시각:
@@ -868,9 +920,8 @@ function returnToProblemInput() {
           </button>
 
           <p class="feedback-hint">
-            평가 저장 여부가 불확실해도
-            풀이 종료 기록은 이미 완료되었습니다.
-            평가 재시도는 선택 사항입니다.
+            평가 저장에 실패해도 풀이 종료 기록은
+            유지됩니다.
           </p>
         </template>
       </section>
@@ -892,9 +943,9 @@ function returnToProblemInput() {
       </section>
 
       <p class="completion-limitation">
-        현재 개발 버전에서는 완료 기록과 코칭 평가를
-        서버 메모리에 보관합니다.
-        서버가 재시작되면 저장된 기록이 사라질 수 있습니다.
+        완료 기록과 코칭 품질 평가는 로컬 SQLite에
+        저장됩니다. 현재 개발용 환경에서는
+        사용자 계정과 클라우드 동기화를 제공하지 않습니다.
       </p>
 
       <button
@@ -912,7 +963,7 @@ function returnToProblemInput() {
     </div>
   </div>
 
-  <!-- Active Solver Workspace -->
+  <!-- Active solver -->
   <div
     v-else
     class="workspace"
@@ -944,6 +995,7 @@ function returnToProblemInput() {
     </header>
 
     <div class="workspace-grid">
+      <!-- Left: problem -->
       <section class="panel problem-panel">
         <div class="panel-header">
           <h2>문제</h2>
@@ -955,6 +1007,7 @@ function returnToProblemInput() {
         />
       </section>
 
+      <!-- Center: editor -->
       <section class="panel editor-panel">
         <div class="panel-header">
           <h2>코드 에디터</h2>
@@ -996,6 +1049,7 @@ function returnToProblemInput() {
         </div>
       </section>
 
+      <!-- Right: agent -->
       <aside class="panel coach-panel">
         <div class="panel-header">
           <h2>AI Coach</h2>
@@ -1003,279 +1057,155 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
-          <section class="control-card">
-            <div class="control-heading">
-              <h3>자동 AI 분석</h3>
+          <CoachInterventionPanel
+            :analysis-result="autoAnalysisResult"
+            :manual-analysis-result="analysisResult"
+            :current-revision="codeRevision"
+            :issue-recovery="issueRecovery"
+            :auto-enabled="autoAnalysisEnabled"
+            :is-auto-analyzing="isAutoAnalyzing"
+            :is-manual-analyzing="isAnalyzing"
+          />
 
-              <label class="switch-label">
+          <!-- Three primary coaching interactions -->
+          <div class="coach-action-dock">
+            <div class="auto-control-row">
+              <label class="auto-control-label">
                 <input
                   v-model="autoAnalysisEnabled"
                   type="checkbox"
+                  class="auto-checkbox"
                 />
-                <span>
+
+                <span>자동 AI 코칭</span>
+
+                <strong>
                   {{ autoAnalysisEnabled ? 'ON' : 'OFF' }}
-                </span>
+                </strong>
               </label>
+
+              <span class="auto-usage">
+                {{ autoAnalysisCalls }}/{{ MAX_AUTO_ANALYSES }}
+              </span>
             </div>
-
-            <p class="control-description">
-              자동 분석은 기본적으로 비활성화됩니다.
-              활성화하면 코드 변경에 따라 실제 LLM API가
-              호출될 수 있습니다.
-            </p>
-
-            <p class="usage-count">
-              자동 분석 요청:
-              <strong>
-                {{ autoAnalysisCalls }} / {{ MAX_AUTO_ANALYSES }}
-              </strong>
-            </p>
 
             <p
               v-if="autoAnalysisLimitReached"
-              class="limit-message"
+              class="auto-limit-notice"
             >
-              이 풀이 화면의 자동 분석 요청 한도에 도달했습니다.
-              추가 자동 요청은 실행하지 않습니다.
-            </p>
-          </section>
-
-          <section class="observation-card">
-            <h3>코드 관찰 상태</h3>
-
-            <p>
-              현재 상태:
-              <strong>{{ observationStatusText }}</strong>
+              자동 분석 한도에 도달했습니다.
+              수동 피드백과 질문은 계속 사용할 수 있습니다.
             </p>
 
-            <p
-              v-if="stableSnapshot"
-              class="snapshot-info"
+            <button
+              type="button"
+              class="analyze-button"
+              :disabled="
+                isAnalyzing ||
+                isAutoAnalyzing ||
+                !currentCode.trim()
+              "
+              @click="runAnalysis"
             >
-              안정된 스냅샷:
-              Revision {{ stableSnapshot.revision }}
-              · {{ stableSnapshot.language }}
-            </p>
-
-            <p class="observation-description">
-              편집 활동:
-              <strong>{{ idleStatusText }}</strong>
-            </p>
-
-            <p
-              v-if="isIdle"
-              class="observation-description"
-            >
-              최근 30초 동안 코드 수정이 감지되지 않았습니다.
-              실제 풀이 정체 여부는 아직 판단하지 않습니다.
-            </p>
-
-            <div
-              v-if="triggerDecision"
-              class="trigger-decision"
-            >
-              <p>
-                분석 후보:
-                <strong>
-                  {{
-                    triggerDecision.eligible
-                      ? '추천'
-                      : '보류'
-                  }}
-                </strong>
-              </p>
-
-              <p class="trigger-reason">
-                {{ triggerDecision.message }}
-              </p>
-            </div>
-
-            <p class="observation-description">
-              분석 후보라도 자동 분석이 OFF이거나
-              요청 한도에 도달하면 호출하지 않습니다.
-            </p>
-
-            <p class="observation-description">
-              기록된 코드 변경:
-              {{ history.length }}개 (최근 최대 20개)
-            </p>
-
-            <p
-              v-if="latestEntry"
-              class="observation-description"
-            >
-              최근 기록:
-              Revision {{ latestEntry.revision }}
-              · {{ latestEntry.language }}
-              ·
               {{
-                latestEntry.changedCharacters === null
-                  ? '첫 코드 기록'
-                  : `약 ${latestEntry.changedCharacters}자 변경`
+                isAnalyzing
+                  ? 'AI 피드백 생성 중...'
+                  : isAutoAnalyzing
+                    ? '자동 분석 진행 중...'
+                    : '지금 피드백 받기'
               }}
-            </p>
-          </section>
+            </button>
 
-          <section class="observation-card">
-            <h3>내부 자동 분석</h3>
+            <CoachQuestionPanel
+              :session-id="sessionId"
+              :problem-text="problemText"
+              :current-code="currentCode"
+              :language="selectedLanguage"
+              :current-revision="codeRevision"
+              :latest-coaching="latestCoachingText"
+            />
+
+            <!-- Secondary tools remain available -->
+            <details class="secondary-tools">
+              <summary>
+                추가 코칭 도구 · 힌트 / 제출 전 점검
+              </summary>
+
+              <div class="secondary-tool-content">
+                <ProgressiveHintPanel
+                  :session-id="sessionId"
+                  :problem-text="problemText"
+                  :current-code="currentCode"
+                  :language="selectedLanguage"
+                  :current-revision="codeRevision"
+                />
+
+                <SubmissionReviewPanel
+                  :session-id="sessionId"
+                  :problem-text="problemText"
+                  :current-code="currentCode"
+                  :language="selectedLanguage"
+                  :current-revision="codeRevision"
+                  :disabled="isAnalyzing || isAutoAnalyzing"
+                />
+              </div>
+            </details>
 
             <p
-              v-if="isAutoAnalyzing"
-              role="status"
+              v-if="errorMessage"
+              class="error-message"
+              role="alert"
             >
-              LangGraph 자동 분석 실행 중...
-            </p>
-
-            <p v-else-if="autoAnalysisResult">
-              자동 분석 완료 · Revision
-              {{ autoAnalysisResult.analyzed_revision }}
+              {{ errorMessage }}
             </p>
 
             <p
-              v-else-if="autoAnalysisError"
+              v-if="autoAnalysisError"
               class="error-message"
               role="alert"
             >
               자동 분석 실패: {{ autoAnalysisError }}
             </p>
 
-            <p v-else-if="!autoAnalysisEnabled">
-              자동 분석이 비활성화되어 있습니다.
-            </p>
-
-            <p v-else>
-              아직 자동 분석 결과가 없습니다.
-            </p>
-
-            <p class="observation-description">
-              분석 결과는 개입 정책으로 전달되며,
-              충분한 코칭 근거가 있을 때만 메시지로 표시됩니다.
-            </p>
-          </section>
-
-          <CoachInterventionPanel
-            :analysis-result="autoAnalysisResult"
-            :current-revision="codeRevision"
-            :issue-recovery="issueRecovery"
-          />
-
-          <CoachQuestionPanel
-            :session-id="sessionId"
-            :problem-text="problemText"
-            :current-code="currentCode"
-            :language="selectedLanguage"
-            :current-revision="codeRevision"
-            :latest-coaching="
-              analysisResult?.analyzed_revision === codeRevision
-                ? analysisResult.summary
-                : autoAnalysisResult?.analyzed_revision === codeRevision
-                  ? autoAnalysisResult.summary
-                  : null
-            "
-          />
-
-          <ProgressiveHintPanel
-            :session-id="sessionId"
-            :problem-text="problemText"
-            :current-code="currentCode"
-            :language="selectedLanguage"
-            :current-revision="codeRevision"
-          />
-
-          <SubmissionReviewPanel
-            :session-id="sessionId"
-            :problem-text="problemText"
-            :current-code="currentCode"
-            :language="selectedLanguage"
-            :current-revision="codeRevision"
-            :disabled="isAnalyzing || isAutoAnalyzing"
-          />
-
-          <button
-            type="button"
-            class="analyze-button"
-            :disabled="isAnalyzing || isAutoAnalyzing"
-            @click="runAnalysis"
-          >
-            {{
-              isAnalyzing
-                ? '분석 중...'
-                : '수동 AI 분석 실행'
-            }}
-          </button>
-
-          <section
-            v-if="analysisResult"
-            class="feedback-card"
-          >
-            <h3>수동 분석 결과</h3>
-
-            <dl>
-              <dt>Revision</dt>
-              <dd>
-                {{ analysisResult.analyzed_revision }}
-              </dd>
-
-              <dt>진행 상태</dt>
-              <dd>{{ analysisResult.progress_status }}</dd>
-
-              <dt>알고리즘</dt>
-              <dd>
-                {{ analysisResult.algorithm ?? '미판단' }}
-              </dd>
-
-              <dt>복잡도</dt>
-              <dd>
-                {{
-                  analysisResult.complexity_estimate
-                    ?? '미판단'
-                }}
-              </dd>
-            </dl>
-
-            <p>{{ analysisResult.summary }}</p>
-
-            <p
-              v-if="analysisResult.positive_observation"
-              class="positive-observation"
+            <!-- Development diagnostics: opt-in only -->
+            <details
+              v-if="showDeveloperMonitor"
+              class="developer-monitor"
             >
-              {{ analysisResult.positive_observation }}
-            </p>
+              <summary>개발용 코드 관찰 정보</summary>
 
-            <div
-              v-if="analysisResult.issues.length > 0"
-              class="issue-list"
-            >
-              <h3>검토할 문제</h3>
+              <p>
+                관찰 상태:
+                {{ observationStatusText }}
+              </p>
 
-              <ul>
-                <li
-                  v-for="(issue, index) in analysisResult.issues"
-                  :key="index"
-                >
-                  <strong>{{ issue.severity }}</strong>
-                  · {{ issue.description }}
+              <p>
+                최근 편집:
+                {{ idleStatusText }}
+                · idle={{ isIdle }}
+              </p>
 
-                  <p>{{ issue.evidence }}</p>
-                </li>
-              </ul>
-            </div>
-          </section>
+              <p v-if="stableSnapshot">
+                안정된 Revision:
+                {{ stableSnapshot.revision }}
+              </p>
 
-          <p
-            v-if="errorMessage"
-            class="error-message"
-            role="alert"
-          >
-            {{ errorMessage }}
-          </p>
+              <p v-if="triggerDecision">
+                분석 후보:
+                {{ triggerDecision.message }}
+              </p>
 
-          <p
-            v-if="!analysisResult && !errorMessage"
-            class="empty-state"
-          >
-            수동 분석 결과가 이곳에 표시됩니다.
-          </p>
+              <p>
+                코드 변경 기록:
+                {{ history.length }}개
+              </p>
+
+              <p v-if="latestEntry">
+                최근 변경 Revision:
+                {{ latestEntry.revision }}
+              </p>
+            </details>
+          </div>
         </div>
       </aside>
     </div>
@@ -1283,6 +1213,10 @@ function returnToProblemInput() {
 </template>
 
 <style scoped>
+/* --------------------------------------------------
+   Workspace
+-------------------------------------------------- */
+
 .workspace {
   min-height: 100vh;
   padding: 20px;
@@ -1401,8 +1335,8 @@ function returnToProblemInput() {
 .coach-content {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
+  gap: 12px;
+  padding: 12px;
 }
 
 .provider-label {
@@ -1414,105 +1348,76 @@ function returnToProblemInput() {
   font-weight: 700;
 }
 
-.observation-card,
-.feedback-card,
-.control-card {
-  padding: 16px;
+/* --------------------------------------------------
+   Coach action dock
+-------------------------------------------------- */
+
+.coach-action-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.auto-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   background: #f8fafc;
 }
 
-.observation-card h3,
-.feedback-card h3,
-.control-card h3 {
-  margin: 0 0 12px;
-  font-size: 14px;
-}
-
-.observation-card p,
-.feedback-card p,
-.control-card p {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.7;
-}
-
-.control-heading {
+.auto-control-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.control-heading h3 {
-  margin-bottom: 0;
-}
-
-.switch-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 9px;
+  min-width: 0;
   color: #334155;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
 
-.switch-label input {
-  width: 16px;
-  height: 16px;
+.auto-checkbox {
+  width: 17px;
+  height: 17px;
+  flex-shrink: 0;
   accent-color: #2563eb;
   cursor: pointer;
 }
 
-.control-description {
-  margin-top: 12px !important;
-  color: #64748b;
-}
-
-.usage-count {
-  margin-top: 12px !important;
-  color: #334155;
-}
-
-.limit-message {
-  margin-top: 10px !important;
-  color: #b45309;
-  font-weight: 600;
-}
-
-.snapshot-info {
-  margin-top: 10px !important;
+.auto-control-label strong {
   color: #2563eb;
-  font-weight: 600;
+  font-size: 11px;
 }
 
-.observation-description {
-  margin-top: 12px !important;
-  color: #64748b;
+.auto-usage {
+  color: #94a3b8;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.trigger-decision {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.trigger-reason {
-  margin-top: 6px !important;
-  color: #64748b;
+.auto-limit-notice {
+  margin: 0;
+  color: #b45309;
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .analyze-button {
   width: 100%;
-  padding: 12px;
+  min-height: 44px;
+  padding: 11px 13px;
   border: none;
-  border-radius: 8px;
+  border-radius: 9px;
   background: #2563eb;
   color: white;
   font: inherit;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -1521,57 +1426,50 @@ function returnToProblemInput() {
   cursor: not-allowed;
 }
 
-.feedback-card dl {
-  display: grid;
-  grid-template-columns: 85px 1fr;
-  gap: 8px;
-  margin: 0 0 16px;
-  font-size: 12px;
+.secondary-tools {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
 }
 
-.feedback-card dt {
+.secondary-tools summary {
   color: #64748b;
-}
-
-.feedback-card dd {
-  margin: 0;
+  font-size: 11px;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  cursor: pointer;
 }
 
-.feedback-card ul {
-  padding-left: 20px;
-  font-size: 13px;
-}
-
-.feedback-card li + li {
+.secondary-tool-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
   margin-top: 12px;
 }
 
-.feedback-card li p {
-  margin-top: 4px;
-  color: #475569;
+.developer-monitor {
+  padding: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 11px;
 }
 
-.positive-observation {
-  margin-top: 12px !important;
-  color: #166534;
+.developer-monitor summary {
+  cursor: pointer;
 }
 
-.issue-list {
-  margin-top: 16px;
-}
-
-.error-message {
-  color: #dc2626;
-  font-size: 13px;
+.developer-monitor p {
   line-height: 1.6;
 }
 
-.empty-state {
-  color: #94a3b8;
-  font-size: 13px;
-  text-align: center;
+.error-message {
+  margin: 0;
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .sr-only {
@@ -1582,6 +1480,10 @@ function returnToProblemInput() {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
+
+/* --------------------------------------------------
+   Completed session
+-------------------------------------------------- */
 
 .completion-page {
   min-height: 100vh;
