@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { CoachingAssistanceActivity } from '@/types/coaching-assistance'
 
 import type { AnalysisResult } from '@/types/analysis'
 import type { IssueRecoveryNotice } from '@/services/analysis-trigger'
@@ -16,6 +17,7 @@ const props = defineProps<{
   isAutoAnalyzing: boolean
   isManualAnalyzing: boolean
   isQuestionAnswering: boolean
+  assistanceActivity?: CoachingAssistanceActivity
   autoAnalysisResult: AnalysisResult | null
   manualAnalysisResult: AnalysisResult | null
   autoAnalysisError: string
@@ -40,6 +42,20 @@ const activity = computed<{
   text: string
   tone: ActivityTone
 }>(() => {
+  if (props.assistanceActivity === 'hint') {
+    return {
+      text: '요청한 단계별 AI 힌트의 응답을 기다리고 있습니다.',
+      tone: 'working',
+    }
+  }
+
+  if (props.assistanceActivity === 'review') {
+    return {
+      text: '제출 전 AI 정적 검토 응답을 기다리고 있습니다.',
+      tone: 'working',
+    }
+  }
+
   if (props.isQuestionAnswering) {
     return {
       text: 'AI 질문에 대한 응답을 기다리고 있습니다.',

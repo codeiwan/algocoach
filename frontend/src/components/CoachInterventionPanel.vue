@@ -8,6 +8,7 @@ import {
 } from 'vue'
 
 import CoachMarkdownText from '@/components/CoachMarkdownText.vue'
+import type { CoachingAssistanceEvent } from '@/types/coaching-assistance'
 
 import {
   INTERVENTION_COOLDOWN_MS,
@@ -49,9 +50,10 @@ const props = defineProps<{
   autoAnalysisError?: string
   manualAnalysisError?: string
   questionExchanges?: readonly QuestionExchange[]
+  assistanceEvents?: readonly CoachingAssistanceEvent[]
 }>()
 
-type MessageSource = 'auto' | 'manual' | 'simulation'
+type MessageSource = 'auto' | 'manual' | 'simulation' | 'hint' | 'review'
 type PolicySource = 'auto' | 'simulation'
 type MessageTone = 'issue' | 'praise' | 'neutral'
 
@@ -371,7 +373,19 @@ const timeline = computed<TimelineEntry[]>(() => {
       revision: exchange.answeredRevision,
     }))
 
-  return [...coaching, ...questions]
+  const assistance: CoachingTimelineEntry[] =
+    (props.assistanceEvents ?? []).map((event) => ({
+      id: event.id,
+      source: event.source,
+      revision: event.revision,
+      tone: event.tone,
+      text: `${event.title}\n\n${event.text}`,
+      atMs: event.atMs,
+      kind: 'coaching',
+      key: `assistance-${event.id}`,
+    }))
+
+  return [...coaching, ...questions, ...assistance]
     .sort((a, b) => b.atMs - a.atMs)
     .slice(0, 30)
 })
@@ -433,6 +447,26 @@ const recoveryTakesPriority = computed(() => {
   const notice = props.issueRecovery
 
   if (!notice || !recoveryDisplay.value) {
+    return false
+  }
+
+  // Show deliberately requested help even when
+  // a previous issue is awaiting revalidation.
+  const current = timeline.value[0]
+
+  if (
+    current?.revision === props.currentRevision &&
+    (
+      current.kind === 'question' ||
+      (
+        current.kind === 'coaching' &&
+        (
+          current.source === 'hint' ||
+          current.source === 'review'
+        )
+      )
+    )
+  ) {
     return false
   }
 
@@ -755,8 +789,12 @@ onBeforeUnmount(() => {
           <div class="latest-meta">
             <span class="message-label">
               {{
-                latestEntry.source === 'manual'
-                  ? '요청한 코드 피드백'
+                latestEntry.source === 'hint'
+                  ? '단계별 힌트'
+                  : latestEntry.source === 'review'
+                    ? '제출 전 AI 점검'
+                    : latestEntry.source === 'manual'
+                      ? '요청한 코드 피드백'
                   : latestEntry.source === 'simulation'
                     ? '개발용 시뮬레이션'
                     : '자동 코칭'
@@ -865,8 +903,12 @@ onBeforeUnmount(() => {
               <div class="history-meta">
                 <strong>
                   {{
-                    entry.source === 'manual'
-                      ? '요청한 피드백'
+                    entry.source === 'hint'
+                      ? '단계별 힌트'
+                      : entry.source === 'review'
+                        ? '제출 전 AI 점검'
+                        : entry.source === 'manual'
+                          ? '요청한 피드백'
                       : entry.source === 'simulation'
                         ? '개발용 시뮬레이션'
                         : '자동 코칭'

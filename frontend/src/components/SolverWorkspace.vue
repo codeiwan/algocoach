@@ -11,10 +11,9 @@ import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import CoachAgentToolbar from '@/components/CoachAgentToolbar.vue'
 import CoachQuestionPanel from '@/components/CoachQuestionPanel.vue'
+import CoachAssistActions from '@/components/CoachAssistActions.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
-import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
 import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
-import SubmissionReviewPanel from '@/components/SubmissionReviewPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
@@ -36,6 +35,7 @@ import {
 } from '@/services/analysis-trigger'
 
 import type { AnalysisResult } from '@/types/analysis'
+import type { CoachingAssistanceActivity, CoachingAssistanceEvent } from '@/types/coaching-assistance'
 import type { StructuredProblem } from '@/types/problem'
 import type { ProgrammingLanguage } from '@/types/programming-language'
 
@@ -195,6 +195,30 @@ function handleQuestionAnswered(
     exchange,
     ...questionExchanges.value,
   ].slice(0, 20)
+}
+
+// --------------------------------------------------
+// AI assistance results in the shared conversation
+// --------------------------------------------------
+
+const assistanceEvents = ref<CoachingAssistanceEvent[]>([])
+const assistanceActivity = ref<CoachingAssistanceActivity>(null)
+
+function handleAssistanceDelivered(event: CoachingAssistanceEvent) {
+  if (completionOutcome.value !== null) return
+
+  assistanceEvents.value = [
+    event,
+    ...assistanceEvents.value,
+  ].slice(0, 20)
+}
+
+function handleAssistanceActivity(
+  state: CoachingAssistanceActivity,
+) {
+  if (completionOutcome.value !== null) return
+
+  assistanceActivity.value = state
 }
 
 // --------------------------------------------------
@@ -1120,6 +1144,7 @@ function returnToProblemInput() {
             :auto-analysis-error="autoAnalysisError"
             :manual-analysis-error="errorMessage"
             :issue-recovery="issueRecovery"
+            :assistance-activity="assistanceActivity"
           />
 
           <CoachInterventionPanel
@@ -1136,6 +1161,7 @@ function returnToProblemInput() {
             :auto-analysis-error="autoAnalysisError"
             :manual-analysis-error="errorMessage"
             :question-exchanges="questionExchanges"
+            :assistance-events="assistanceEvents"
           />
 
           <div class="coach-action-dock">
@@ -1173,30 +1199,17 @@ function returnToProblemInput() {
               @activity="handleQuestionActivity"
             />
 
-            <details class="secondary-tools">
-              <summary>
-                추가 코칭 도구 · 힌트 / 제출 전 점검
-              </summary>
+            <CoachAssistActions
+              :session-id="sessionId"
+              :problem-text="problemText"
+              :current-code="currentCode"
+              :language="selectedLanguage"
+              :current-revision="codeRevision"
+              :disabled="isAnalyzing || isAutoAnalyzing || isQuestionAnswering"
+              @delivered="handleAssistanceDelivered"
+              @activity="handleAssistanceActivity"
+            />
 
-              <div class="secondary-tool-content">
-                <ProgressiveHintPanel
-                  :session-id="sessionId"
-                  :problem-text="problemText"
-                  :current-code="currentCode"
-                  :language="selectedLanguage"
-                  :current-revision="codeRevision"
-                />
-
-                <SubmissionReviewPanel
-                  :session-id="sessionId"
-                  :problem-text="problemText"
-                  :current-code="currentCode"
-                  :language="selectedLanguage"
-                  :current-revision="codeRevision"
-                  :disabled="isAnalyzing || isAutoAnalyzing"
-                />
-              </div>
-            </details>
 
             <p
               v-if="errorMessage"
