@@ -27,6 +27,7 @@ const props = defineProps<{
   currentRevision: number
   autoEnabled: boolean
   busy?: boolean
+  suppressOffers?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -104,7 +105,7 @@ const offerText = computed(() => {
 })
 
 function createOffer(reason: OfferReason) {
-  if (offer.value || !props.autoEnabled || exhausted.value || hintCount.value >= 3) {
+  if (offer.value || !props.autoEnabled || props.suppressOffers || exhausted.value || hintCount.value >= 3) {
     return
   }
 
@@ -126,7 +127,7 @@ function createOffer(reason: OfferReason) {
 // Periodically decide whether an optional offer
 // makes sense. This never makes an API request.
 function observe() {
-  if (exhausted.value) return
+  if (exhausted.value || props.suppressOffers) return
 
   const reason = evaluateProactiveOffer({
     nowMs: Date.now(),
@@ -186,9 +187,9 @@ watch([() => props.currentCode, () => props.language], ([code]) => {
 })
 
 watch(
-  () => props.autoEnabled,
-  (enabled) => {
-    if (!enabled && offer.value?.phase === 'offered') {
+  [() => props.autoEnabled, () => props.suppressOffers],
+  ([enabled, suppressed]) => {
+    if ((!enabled || suppressed) && offer.value?.phase === 'offered') {
       offer.value = null
     }
   },
@@ -280,7 +281,7 @@ async function acceptOffer() {
 }
 
 function simulateOffer() {
-  if (!showDebug || props.busy) return
+  if (!showDebug || props.busy || props.suppressOffers) return
   createOffer('idle')
 }
 
@@ -300,6 +301,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <Transition name="coach-offer">
   <section v-if="offer" class="proactive-card" aria-label="AlgoCoach의 선제적 도움 제안">
     <div class="offer-heading">
       <strong>AlgoCoach가 먼저 말을 걸었습니다</strong>
@@ -318,6 +320,7 @@ onBeforeUnmount(() => {
 
     <p v-else class="loading-text" role="status">요청하신 힌트를 생성하고 있습니다...</p>
   </section>
+  </Transition>
 
   <p v-if="errorMessage" class="proactive-error" role="alert">
     {{ errorMessage }}

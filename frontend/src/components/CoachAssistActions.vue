@@ -21,11 +21,13 @@ const props = defineProps<{
   currentRevision: number
   disabled?: boolean
   hideHintButton?: boolean
+  editorPlacement?: boolean
 }>()
 
 const emit = defineEmits<{
   delivered: [event: CoachingAssistanceEvent]
   activity: [state: CoachingAssistanceActivity]
+  reviewed: [result: SubmissionReviewResult]
 }>()
 
 // --------------------------------------------------
@@ -296,6 +298,8 @@ async function requestReview() {
       UNCERTAIN: '판단 보류',
     }[result.status]
 
+    emit('reviewed', result)
+
     publish({
       source: 'review',
       title: `제출 전 AI 점검 · ${statusLabel}`,
@@ -337,7 +341,8 @@ onBeforeUnmount(() => {
 <template>
   <section
     class="coach-assist-actions"
-    aria-label="추가 AI 코칭 요청"
+    :class="{ 'editor-placement': editorPlacement }"
+    aria-label="제출 전 AI 코드 점검"
   >
     <div
       class="assist-buttons"
@@ -462,4 +467,25 @@ onBeforeUnmount(() => {
 .assist-note {
   color: #64748b;
 }
+</style>
+<style scoped>
+.coach-assist-actions.editor-placement {
+  width: min(100%, 270px);
+  align-items: stretch;
+}
+.editor-placement .assist-button {
+  min-height: 39px;
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  box-shadow: 0 1px 2px rgba(30, 41, 59, .045);
+}
+.editor-placement .assist-button:hover:not(:disabled) {
+  background: #e0e7ff;
+  border-color: #818cf8;
+}
+.editor-placement .assist-status,
+.editor-placement .assist-note,
+.editor-placement .assist-error { text-align: center; }
 </style>

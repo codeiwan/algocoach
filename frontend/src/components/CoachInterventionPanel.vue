@@ -59,6 +59,7 @@ const props = defineProps<{
   currentCode: string
   language: ProgrammingLanguage
   assistanceBusy?: boolean
+  suppressProactiveOffers?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -741,6 +742,7 @@ onBeforeUnmount(() => {
         :current-revision="currentRevision"
         :auto-enabled="!!autoEnabled"
         :busy="assistanceBusy"
+        :suppress-offers="suppressProactiveOffers"
         @delivered="emit('assistanceDelivered', $event)"
         @activity="emit('assistanceActivity', $event)"
       />
@@ -751,9 +753,11 @@ onBeforeUnmount(() => {
           <span>Revision {{ currentRevision }}</span>
         </div>
 
+        <Transition name="coach-arrival">
         <!-- Pending issue recovery -->
         <article
           v-if="recoveryTakesPriority && recoveryDisplay"
+          :key="`recovery-${issueRecovery?.phase}-${issueRecovery?.checkedRevision}`"
           class="latest-card recovery-card"
           :class="`recovery-${recoveryDisplay.tone}`"
         >
@@ -768,6 +772,7 @@ onBeforeUnmount(() => {
         <!-- Latest question and answer -->
         <article
           v-else-if="latestEntry?.kind === 'question'"
+          :key="latestEntry.key"
           class="latest-card conversation-card"
         >
           <div class="latest-meta">
@@ -808,6 +813,7 @@ onBeforeUnmount(() => {
         <!-- Latest automatic or manual coaching -->
         <article
           v-else-if="latestEntry?.kind === 'coaching'"
+          :key="latestEntry.key"
           class="latest-card"
           :class="latestEntry.tone"
         >
@@ -858,6 +864,7 @@ onBeforeUnmount(() => {
         <!-- Recovery without a current coaching message -->
         <article
           v-else-if="recoveryDisplay"
+          :key="`recovery-fallback-${issueRecovery?.phase}`"
           class="latest-card recovery-card"
           :class="`recovery-${recoveryDisplay.tone}`"
         >
@@ -868,6 +875,7 @@ onBeforeUnmount(() => {
 
         <div
           v-else
+          key="empty-coaching"
           class="empty-coaching"
         >
           <strong>아직 전달할 코칭이 없습니다.</strong>
@@ -877,6 +885,7 @@ onBeforeUnmount(() => {
             AI 응답이 이곳에 표시됩니다.
           </p>
         </div>
+        </Transition>
       </div>
 
       <!-- Previous conversations and coaching -->
@@ -889,7 +898,7 @@ onBeforeUnmount(() => {
           <span>{{ previousEntries.length }}개</span>
         </div>
 
-        <div class="history-list">
+        <TransitionGroup name="coach-history" tag="div" class="history-list">
           <article
             v-for="entry in previousEntries"
             :key="entry.key"
@@ -968,7 +977,7 @@ onBeforeUnmount(() => {
               이전 코드 Revision의 기록입니다.
             </p>
           </article>
-        </div>
+        </TransitionGroup>
       </section>
 
       <details

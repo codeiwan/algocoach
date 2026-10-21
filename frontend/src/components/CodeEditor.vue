@@ -13,6 +13,7 @@ import type { ProgrammingLanguage } from '@/types/programming-language'
 const props = defineProps<{
   modelValue: string
   language: ProgrammingLanguage
+  feedbackGlow?: 'success' | 'risk' | null
 }>()
 
 const emit = defineEmits<{
@@ -119,7 +120,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="editorContainer" class="monaco-container"></div>
+  <div
+    ref="editorContainer"
+    class="monaco-container"
+    :class="{
+      'analysis-glow-success': feedbackGlow === 'success',
+      'analysis-glow-risk': feedbackGlow === 'risk',
+    }"
+  ></div>
 </template>
 
 <style scoped>
@@ -135,5 +143,27 @@ onBeforeUnmount(() => {
 
 .monaco-container:focus-within {
   border-color: #93c5fd;
+}
+</style>
+<style scoped>
+.monaco-container.analysis-glow-success {
+  border-color: #4ade80;
+  animation: editor-verified-glow 2.4s ease-out both;
+}
+.monaco-container.analysis-glow-risk {
+  border-color: #fb7185;
+  animation: editor-risk-glow 2.4s ease-out both;
+}
+@keyframes editor-verified-glow {
+  0% { box-shadow: 0 0 0 1px rgba(34,197,94,.32), 0 0 34px rgba(34,197,94,.28); }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0), 0 0 0 rgba(34,197,94,0); }
+}
+@keyframes editor-risk-glow {
+  0% { box-shadow: 0 0 0 1px rgba(239,68,68,.35), 0 0 34px rgba(239,68,68,.24); }
+  100% { box-shadow: 0 0 0 0 rgba(239,68,68,0), 0 0 0 rgba(239,68,68,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .monaco-container.analysis-glow-success,
+  .monaco-container.analysis-glow-risk { animation: none; }
 }
 </style>

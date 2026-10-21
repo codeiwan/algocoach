@@ -23,6 +23,7 @@ import {
   AUTO_MAX_PER_SESSION, evaluateAutoAnalysisBudget,
 } from '@/services/autonomous-analysis-policy'
 import { hasEditedReportedIssueLine } from '@/services/issue-recovery'
+import { substantiallyChangedSinceReview } from '@/services/coaching-satisfaction'
 
 import {
   recordSessionFeedback,
@@ -39,6 +40,7 @@ import {
 } from '@/services/analysis-trigger'
 
 import type { AnalysisResult } from '@/types/analysis'
+import type { SubmissionReviewResult } from '@/types/submission'
 import type { CoachingAssistanceActivity, CoachingAssistanceEvent } from '@/types/coaching-assistance'
 import type { StructuredProblem } from '@/types/problem'
 import type { ProgrammingLanguage } from '@/types/programming-language'
@@ -157,6 +159,96 @@ let autoAbortController: AbortController | null = null
 const autoAnalysisLimitReached = computed(
   () => autoAnalysisCalls.value >= MAX_AUTO_ANALYSES,
 )
+
+/**
+ * Only refill the 24-request session allowance.
+ * Do not clear the rolling 10-minute budget or the last analysis snapshot.
+ */
+function refillAutomaticBudget() {
+  if (completionOutcome.value !== null || isAutoAnalyzing.value) return
+  autoAnalysisCalls.value = 0
+  if (autoScheduleStatus.value?.includes('예산')) {
+    autoScheduleStatus.value = null
+  }
+}
+
+// Code accepted by the last positive static review (not a judge verdict).
+// Offer suppression persists across small edits and ends after substantive rewrites.
+const reviewedCodeBaseline = ref<{ code: string; language: ProgrammingLanguage } | null>(null)
+
+const suppressProactiveOffers = computed(() => {
+  const baseline = reviewedCodeBaseline.value
+  return (
+    baseline !== null &&
+    baseline.language === selectedLanguage.value &&
+    !substantiallyChangedSinceReview(baseline.code, currentCode.value)
+  )
+})
+
+function markReviewSatisfied() {
+  reviewedCodeBaseline.value = {
+    code: currentCode.value,
+    language: selectedLanguage.value,
+  }
+}
+
+// Short visual acknowledgement of model feedback, not judge verdicts.
+const editorFeedbackGlow = ref<'success' | 'risk' | null>(null)
+let editorGlowTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearEditorGlow() {
+  if (editorGlowTimer !== null) clearTimeout(editorGlowTimer)
+  editorGlowTimer = null
+  editorFeedbackGlow.value = null
+}
+
+function showEditorGlow(tone: 'success' | 'risk') {
+  clearEditorGlow()
+  editorFeedbackGlow.value = tone
+  editorGlowTimer = setTimeout(clearEditorGlow, 2_400)
+}
+
+function considerPositiveAnalysis(result: AnalysisResult | null) {
+  if (
+    result === null ||
+    completionOutcome.value !== null ||
+    result.analyzed_revision !== codeRevision.value
+  ) return
+
+  if (
+    result.issues.length === 0 &&
+    (result.positive_observation?.trim() || result.progress_status === 'REVIEWING')
+  ) {
+    // Praise for a partial implementation is not a completed review.
+    if (result.progress_status === 'REVIEWING') {
+      markReviewSatisfied()
+    }
+    showEditorGlow('success')
+  } else if (result.issues.some(
+    (issue) => issue.severity === 'CRITICAL' || issue.severity === 'WARNING',
+  )) {
+    reviewedCodeBaseline.value = null
+  }
+}
+
+watch(autoAnalysisResult, considerPositiveAnalysis)
+watch(analysisResult, considerPositiveAnalysis)
+
+function handleSubmissionReviewed(result: SubmissionReviewResult) {
+  if (
+    completionOutcome.value !== null ||
+    result.reviewed_revision !== codeRevision.value
+  ) return
+
+  if (result.status === 'RISK_FOUND') {
+    reviewedCodeBaseline.value = null
+    showEditorGlow('risk')
+  } else if (result.status === 'NO_OBVIOUS_RISK') {
+    markReviewSatisfied()
+    showEditorGlow('success')
+  }
+}
+
 
 // --------------------------------------------------
 // AI question activity — Stage 5.8B
@@ -521,6 +613,7 @@ watch([selectedLanguage, currentCode], () => {
   }
 
   codeRevision.value += 1
+  clearEditorGlow()
 
   analysisResult.value = null
   errorMessage.value = ''
@@ -878,6 +971,7 @@ function handleSessionCompleted(
   }
 
   autoAnalysisEnabled.value = false
+  clearEditorGlow()
   clearAutoAnalysisTimer()
   autoScheduleStatus.value = null
 
@@ -909,6 +1003,7 @@ function handleSessionCompleted(
 // --------------------------------------------------
 
 onBeforeUnmount(() => {
+  clearEditorGlow()
   clearAutoAnalysisTimer()
   if (observationTimer !== null) {
     clearTimeout(observationTimer)
@@ -1191,10 +1286,27 @@ function returnToProblemInput() {
           <CodeEditor
             v-model="currentCode"
             :language="selectedLanguage"
+            :feedback-glow="editorFeedbackGlow"
           />
 
-          <div class="editor-footer">
-            Monaco Editor · 4 Spaces · LLM Analysis
+          <div class="editor-bottom-bar">
+            <div class="editor-footer">
+              Monaco Editor · 4 Spaces · LLM Analysis
+            </div>
+
+            <CoachAssistActions
+              :hide-hint-button="true"
+              :editor-placement="true"
+              :session-id="sessionId"
+              :problem-text="problemText"
+              :current-code="currentCode"
+              :language="selectedLanguage"
+              :current-revision="codeRevision"
+              :disabled="isAnalyzing || isAutoAnalyzing || isQuestionAnswering"
+              @delivered="handleAssistanceDelivered"
+              @activity="handleAssistanceActivity"
+              @reviewed="handleSubmissionReviewed"
+            />
           </div>
         </div>
       </section>
@@ -1214,6 +1326,7 @@ function returnToProblemInput() {
           -->
           <CoachAgentToolbar
             v-model:auto-enabled="autoAnalysisEnabled"
+            @refill-budget="refillAutomaticBudget"
             :auto-analysis-calls="autoAnalysisCalls"
             :max-auto-analyses="MAX_AUTO_ANALYSES"
             :auto-schedule-status="autoScheduleStatus"
@@ -1228,6 +1341,12 @@ function returnToProblemInput() {
             :manual-analysis-error="errorMessage"
             :issue-recovery="issueRecovery"
             :assistance-activity="assistanceActivity"
+            :feedback-disabled="
+              isAnalyzing ||
+              isAutoAnalyzing ||
+              !currentCode.trim()
+            "
+            @request-feedback="runAnalysis"
           />
 
           <CoachInterventionPanel
@@ -1255,30 +1374,12 @@ function returnToProblemInput() {
               isQuestionAnswering ||
               assistanceActivity !== null
             "
+            :suppress-proactive-offers="suppressProactiveOffers"
             @assistance-delivered="handleAssistanceDelivered"
             @assistance-activity="handleAssistanceActivity"
           />
 
           <div class="coach-action-dock">
-            <button
-              type="button"
-              class="analyze-button"
-              :disabled="
-                isAnalyzing ||
-                isAutoAnalyzing ||
-                !currentCode.trim()
-              "
-              @click="runAnalysis"
-            >
-              {{
-                isAnalyzing
-                  ? 'AI 피드백 생성 중...'
-                  : isAutoAnalyzing
-                    ? '자동 분석 진행 중...'
-                    : '지금 피드백 받기'
-              }}
-            </button>
-
             <!--
               Question activity events are forwarded
               to the main agent status.
@@ -1292,18 +1393,6 @@ function returnToProblemInput() {
               :latest-coaching="latestCoachingText"
               @answered="handleQuestionAnswered"
               @activity="handleQuestionActivity"
-            />
-
-            <CoachAssistActions
-              :hide-hint-button="true"
-              :session-id="sessionId"
-              :problem-text="problemText"
-              :current-code="currentCode"
-              :language="selectedLanguage"
-              :current-revision="codeRevision"
-              :disabled="isAnalyzing || isAutoAnalyzing || isQuestionAnswering"
-              @delivered="handleAssistanceDelivered"
-              @activity="handleAssistanceActivity"
             />
 
 
