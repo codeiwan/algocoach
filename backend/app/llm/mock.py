@@ -12,6 +12,11 @@ from app.schemas.problem import (
     ProblemStructureRequest,
     StructuredProblem,
 )
+from app.schemas.submission_review import (
+    ReviewStatus,
+    SubmissionReviewRequest,
+    SubmissionReviewResult,
+)
 
 
 MOCK_HINT_MESSAGES: dict[HintLevel, str] = {
@@ -31,16 +36,15 @@ MOCK_HINT_MESSAGES: dict[HintLevel, str] = {
 
 
 class MockLLMProvider:
-    """Return predictable responses without calling an actual LLM."""
+    """Return predictable responses without actual LLM calls."""
 
     async def generate(self, prompt: str) -> str:
-        """Return a fixed text response."""
-
         return "Mock Provider 응답입니다. 실제 LLM은 호출하지 않았습니다."
 
-    async def analyze(self, request: AnalysisRequest) -> AnalysisResult:
-        """Return a structured mock code analysis."""
-
+    async def analyze(
+        self,
+        request: AnalysisRequest,
+    ) -> AnalysisResult:
         if request.current_code.strip():
             progress_status = ProgressStatus.IMPLEMENTING
         else:
@@ -50,7 +54,10 @@ class MockLLMProvider:
             analyzed_revision=request.code_revision,
             algorithm=None,
             progress_status=progress_status,
-            summary="Mock 분석 결과입니다. 실제 코드 추론은 수행하지 않았습니다.",
+            summary=(
+                "Mock 분석 결과입니다. "
+                "실제 코드 추론은 수행하지 않았습니다."
+            ),
             positive_observation=None,
             complexity_estimate=None,
             issues=[],
@@ -60,8 +67,6 @@ class MockLLMProvider:
         self,
         request: ProblemStructureRequest,
     ) -> StructuredProblem:
-        """Preserve the original problem without AI extraction."""
-
         return StructuredProblem(
             title=None,
             goal=request.problem_text.strip(),
@@ -72,9 +77,10 @@ class MockLLMProvider:
             ambiguities=[],
         )
 
-    async def generate_hint(self, request: HintRequest) -> HintResult:
-        """Return a predefined hint for the requested level."""
-
+    async def generate_hint(
+        self,
+        request: HintRequest,
+    ) -> HintResult:
         return HintResult(
             hinted_revision=request.code_revision,
             level=request.level,
@@ -82,7 +88,25 @@ class MockLLMProvider:
             code_reference=None,
         )
 
-    async def aclose(self) -> None:
-        """No resources need to be released by the mock provider."""
+    async def review_submission(
+        self,
+        request: SubmissionReviewRequest,
+    ) -> SubmissionReviewResult:
+        """
+        Return UNCERTAIN rather than pretending code was reviewed.
+        """
 
+        return SubmissionReviewResult(
+            reviewed_revision=request.code_revision,
+            status=ReviewStatus.UNCERTAIN,
+            summary=(
+                "Mock 제출 전 점검 결과입니다. "
+                "실제 코드 분석이나 테스트 실행은 수행하지 않았습니다."
+            ),
+            findings=[],
+            complexity_assessment=None,
+            suggested_checks=[],
+        )
+
+    async def aclose(self) -> None:
         pass
