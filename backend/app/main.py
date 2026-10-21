@@ -7,6 +7,7 @@ from app.agents.graph import create_analysis_graph
 from app.api.analysis import router as analysis_router
 from app.api.hints import router as hints_router
 from app.api.problems import router as problems_router
+from app.api.submission import router as submission_router
 from app.core.config import Settings
 from app.llm.factory import create_llm_provider
 from app.llm.provider import LLMProvider
@@ -32,9 +33,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     app.state.llm_provider = provider
-    app.state.analysis_graph = create_analysis_graph(provider)
 
-    # Hint progress is maintained separately for each session.
+    # Existing code-analysis LangGraph.
+    app.state.analysis_graph = create_analysis_graph(
+        provider
+    )
+
+    # Existing session-based progressive hint manager.
     app.state.hint_session_store = HintSessionStore()
 
     try:
@@ -50,10 +55,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# --------------------------------------------------
+# API routers
+# --------------------------------------------------
+
 app.include_router(analysis_router)
 app.include_router(problems_router)
 app.include_router(hints_router)
+app.include_router(submission_router)
 
+
+# --------------------------------------------------
+# Health check
+# --------------------------------------------------
 
 @app.get("/api/v1/health")
 async def health_check() -> dict[str, str]:
@@ -62,8 +77,14 @@ async def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# --------------------------------------------------
+# Legacy development endpoint
+# --------------------------------------------------
+
 @app.get("/api/v1/dev/mock")
-async def mock_provider_check(request: Request) -> dict[str, str]:
+async def mock_provider_check(
+    request: Request,
+) -> dict[str, str]:
     """Legacy development endpoint for text response testing."""
 
     provider: LLMProvider = request.app.state.llm_provider
