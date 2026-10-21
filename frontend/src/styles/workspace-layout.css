@@ -1,0 +1,220 @@
+
+/*
+ * AlgoCoach Solver Workspace Layout
+ *
+ * Purpose:
+ * - Keep the active solver within the viewport.
+ * - Give problem, Monaco editor and coaching panel
+ *   independent vertical scrolling.
+ * - Preserve the existing component logic and styles.
+ *
+ * The #app prefix intentionally takes precedence over
+ * the scoped styles in SolverWorkspace.vue and
+ * CodeEditor.vue.
+ *
+ * This stylesheet affects only the active workspace.
+ * The home and completed-session screens remain unchanged.
+ */
+
+/* --------------------------------------------------
+   1. Viewport-sized solver
+-------------------------------------------------- */
+
+#app .workspace {
+  display: flex;
+  flex-direction: column;
+
+  box-sizing: border-box;
+
+  height: 100vh;
+  height: 100dvh;
+
+  min-height: 0;
+
+  overflow: hidden;
+}
+
+#app .workspace-header {
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------
+   2. Three-column workspace grid
+-------------------------------------------------- */
+
+#app .workspace-grid {
+  flex: 1 1 0;
+
+  min-width: 0;
+  min-height: 0;
+
+  grid-template-rows: minmax(0, 1fr);
+
+  overflow: hidden;
+}
+
+#app .workspace-grid > .panel {
+  box-sizing: border-box;
+
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+
+  overflow: hidden;
+}
+
+#app .workspace-grid .panel-header {
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------
+   3. Left panel: independent problem scrolling
+-------------------------------------------------- */
+
+#app .problem-panel > .problem-reader {
+  flex: 1 1 0;
+
+  min-width: 0;
+  min-height: 0;
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  overscroll-behavior: contain;
+}
+
+/* --------------------------------------------------
+   4. Center panel: Monaco uses available height
+-------------------------------------------------- */
+
+#app .editor-panel .editor-content {
+  flex: 1 1 0;
+
+  min-width: 0;
+  min-height: 0;
+
+  overflow: hidden;
+}
+
+/*
+ * CodeEditor.vue originally specifies min-height: 480px.
+ * Override that minimum so Monaco can fit inside its panel.
+ *
+ * flex-grow fills the remaining space while height: 0
+ * prevents the code content from expanding the panel.
+ *
+ * Monaco's automaticLayout option already observes
+ * changes to its container dimensions.
+ */
+
+#app .editor-panel .monaco-container {
+  flex: 1 1 0;
+
+  box-sizing: border-box;
+
+  width: 100%;
+  height: 0;
+
+  min-width: 0;
+  min-height: 0;
+
+  overflow: hidden;
+}
+
+#app .editor-panel .editor-footer {
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------
+   5. Right panel: independent coaching scrolling
+-------------------------------------------------- */
+
+#app .coach-panel .coach-content {
+  flex: 1 1 0;
+
+  min-width: 0;
+  min-height: 0;
+
+  overflow-x: hidden;
+  overflow-y: auto;
+
+  overscroll-behavior: contain;
+}
+
+/* --------------------------------------------------
+   6. Scrollbar appearance
+-------------------------------------------------- */
+
+#app .problem-reader,
+#app .coach-content {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+/* --------------------------------------------------
+   7. Compact desktop heights
+-------------------------------------------------- */
+
+@media (min-width: 1051px) and (max-height: 620px) {
+  #app .workspace {
+    padding: 12px;
+  }
+
+  #app .workspace-header {
+    margin-bottom: 12px;
+  }
+
+  #app .workspace-grid {
+    gap: 10px;
+  }
+}
+
+/* --------------------------------------------------
+   8. Tablet and mobile
+ *
+ * When three columns no longer fit, stack panels.
+ * Keep the whole workspace within the viewport.
+ *
+ * The grid itself scrolls to access the three panels,
+ * and each panel still supports its own content scrolling.
+-------------------------------------------------- */
+
+@media (max-width: 1050px) {
+  #app .workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+
+    grid-auto-rows: clamp(340px, 60dvh, 620px);
+
+    overflow-x: hidden;
+    overflow-y: auto;
+
+    overscroll-behavior: contain;
+  }
+
+  #app .workspace-grid > .panel {
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+  }
+}
+
+/* --------------------------------------------------
+   9. Small-screen spacing
+-------------------------------------------------- */
+
+@media (max-width: 600px) {
+  #app .workspace {
+    padding: 12px;
+  }
+
+  #app .workspace-header {
+    margin-bottom: 12px;
+    gap: 10px;
+  }
+
+  #app .workspace-grid {
+    gap: 12px;
+  }
+}
