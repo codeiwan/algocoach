@@ -1,4 +1,10 @@
 import json
+
+from app.llm.coaching_quality import COACHING_QUALITY_INSTRUCTIONS
+from app.llm.issue_verification import (
+    apply_verification,
+    verify_candidate_issues,
+)
 from typing import Literal
 
 from openai import AsyncOpenAI
@@ -68,9 +74,11 @@ Progress status:
 Issues:
 - Report only meaningful problems supported by the code.
 - CRITICAL: A clear, substantial correctness issue.
-- WARNING: A plausible issue needing attention.
+- WARNING: A concrete, actionable risk supported by a counterexample or invariant.
 - INFO: A minor observation.
-- Each issue must contain a specific explanation and evidence.
+- Each issue must contain a specific explanation and evidence, not just a possibility.
+- Include a legal counterexample with expected and implied actual results, or a valid proof.
+- If the suspicion cannot survive this check, omit the issue entirely.
 - Avoid repeating the same underlying issue.
 - Never invent code, constraints, or line numbers.
 
@@ -668,7 +676,11 @@ class OpenAILLMProvider:
 
         response = await self._client.responses.parse(
             model=self._model,
-            instructions=ANALYSIS_INSTRUCTIONS,
+            instructions=(
+                ANALYSIS_INSTRUCTIONS
+                + "\n\n"
+                + COACHING_QUALITY_INSTRUCTIONS
+            ),
             input=json.dumps(payload, ensure_ascii=False),
             text_format=LLMAnalysisOutput,
             max_output_tokens=2500,
@@ -684,6 +696,73 @@ class OpenAILLMProvider:
 
         has_code = bool(request.current_code.strip())
 
+        issues = (
+            normalize_issues(output.issues, request.current_code)
+            if has_code
+            else []
+        )
+
+        initial_issue_count = len(issues)
+
+        if issues:
+            resolution = await verify_candidate_issues(
+                self._client,
+                self._model,
+                problem_text=request.problem_text,
+                source_code=request.current_code,
+                language=request.language.value,
+                candidates=[
+                    {
+                        "category": issue.category,
+                        "severity": issue.severity.value,
+                        "description": issue.description,
+                        "evidence": issue.evidence,
+                    }
+                    for issue in issues
+                ],
+            )
+
+            issues = apply_verification(
+                issues,
+                resolution,
+                IssueSeverity.INFO,
+            )
+
+        removed_unverified = (
+            len(issues) < initial_issue_count
+        )
+
+        verified_summary = output.summary.strip()
+
+        if removed_unverified:
+            verified_summary = (
+                "초기 분석의 일부 오류 주장은 추가 검토에서 "
+                "충분히 뒷받침되지 않아 제외했습니다. "
+                "현재 코드를 정답으로 보증하는 의미는 아닙니다."
+            )
+
+        verified_progress = output.progress_status
+
+        if (
+            removed_unverified
+            and not issues
+            and verified_progress == ProgressStatus.DEBUGGING
+        ):
+            verified_progress = ProgressStatus.REVIEWING
+
+        if issues and all(
+            issue.severity == IssueSeverity.INFO
+            for issue in issues
+        ):
+            if verified_progress == ProgressStatus.DEBUGGING:
+                verified_progress = ProgressStatus.REVIEWING
+
+            verified_summary = (
+                "현재 코드에는 추가 확인이 필요한 "
+                "관찰 사항이 있습니다. "
+                "확인된 오류나 정답 판정을 의미하지 않습니다."
+            )
+
         return AnalysisResult(
             analyzed_revision=request.code_revision,
             algorithm=(
@@ -691,8 +770,8 @@ class OpenAILLMProvider:
                 if has_code
                 else None
             ),
-            progress_status=output.progress_status,
-            summary=output.summary.strip(),
+            progress_status=verified_progress,
+            summary=verified_summary,
             positive_observation=(
                 output.positive_observation
                 if has_code
@@ -703,14 +782,7 @@ class OpenAILLMProvider:
                 if has_code
                 else None
             ),
-            issues=(
-                normalize_issues(
-                    output.issues,
-                    request.current_code,
-                )
-                if has_code
-                else []
-            ),
+            issues=issues,
         )
 
     async def structure_problem(
@@ -806,7 +878,11 @@ class OpenAILLMProvider:
 
         response = await self._client.responses.parse(
             model=self._model,
-            instructions=SUBMISSION_REVIEW_INSTRUCTIONS,
+            instructions=(
+                SUBMISSION_REVIEW_INSTRUCTIONS
+                + "\n\n"
+                + COACHING_QUALITY_INSTRUCTIONS
+            ),
             input=json.dumps(payload, ensure_ascii=False),
             text_format=LLMSubmissionReviewOutput,
             max_output_tokens=3500,
@@ -824,6 +900,30 @@ class OpenAILLMProvider:
             output.findings,
             request.current_code,
         )
+
+        if findings:
+            resolution = await verify_candidate_issues(
+                self._client,
+                self._model,
+                problem_text=request.problem_text,
+                source_code=request.current_code,
+                language=request.language.value,
+                candidates=[
+                    {
+                        "category": finding.category.value,
+                        "severity": finding.severity.value,
+                        "description": finding.description,
+                        "evidence": finding.evidence,
+                    }
+                    for finding in findings
+                ],
+            )
+
+            findings = apply_verification(
+                findings,
+                resolution,
+                ReviewSeverity.LOW,
+            )
 
         status = normalize_review_status(
             output.status,
