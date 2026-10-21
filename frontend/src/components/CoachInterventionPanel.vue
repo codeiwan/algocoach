@@ -8,6 +8,9 @@ import {
 } from 'vue'
 
 import CoachMarkdownText from '@/components/CoachMarkdownText.vue'
+import CoachProactiveOffer from '@/components/CoachProactiveOffer.vue'
+import type { ProgrammingLanguage } from '@/types/programming-language'
+import type { CoachingAssistanceActivity } from '@/types/coaching-assistance'
 import type { CoachingAssistanceEvent } from '@/types/coaching-assistance'
 
 import {
@@ -51,6 +54,16 @@ const props = defineProps<{
   manualAnalysisError?: string
   questionExchanges?: readonly QuestionExchange[]
   assistanceEvents?: readonly CoachingAssistanceEvent[]
+  sessionId: string
+  problemText: string
+  currentCode: string
+  language: ProgrammingLanguage
+  assistanceBusy?: boolean
+}>()
+
+const emit = defineEmits<{
+  assistanceDelivered: [event: CoachingAssistanceEvent]
+  assistanceActivity: [state: CoachingAssistanceActivity]
 }>()
 
 type MessageSource = 'auto' | 'manual' | 'simulation' | 'hint' | 'review'
@@ -720,6 +733,18 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="feed-scroll">
+      <CoachProactiveOffer
+        :session-id="sessionId"
+        :problem-text="problemText"
+        :current-code="currentCode"
+        :language="language"
+        :current-revision="currentRevision"
+        :auto-enabled="!!autoEnabled"
+        :busy="assistanceBusy"
+        @delivered="emit('assistanceDelivered', $event)"
+        @activity="emit('assistanceActivity', $event)"
+      />
+
       <div class="latest-section">
         <div class="section-heading">
           <strong>최신 대화</strong>

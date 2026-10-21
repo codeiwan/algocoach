@@ -1245,6 +1245,18 @@ function returnToProblemInput() {
             :manual-analysis-error="errorMessage"
             :question-exchanges="questionExchanges"
             :assistance-events="assistanceEvents"
+            :session-id="sessionId"
+            :problem-text="problemText"
+            :current-code="currentCode"
+            :language="selectedLanguage"
+            :assistance-busy="
+              isAnalyzing ||
+              isAutoAnalyzing ||
+              isQuestionAnswering ||
+              assistanceActivity !== null
+            "
+            @assistance-delivered="handleAssistanceDelivered"
+            @assistance-activity="handleAssistanceActivity"
           />
 
           <div class="coach-action-dock">
@@ -1283,6 +1295,7 @@ function returnToProblemInput() {
             />
 
             <CoachAssistActions
+              :hide-hint-button="true"
               :session-id="sessionId"
               :problem-text="problemText"
               :current-code="currentCode"

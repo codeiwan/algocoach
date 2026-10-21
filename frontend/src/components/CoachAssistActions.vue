@@ -20,6 +20,7 @@ const props = defineProps<{
   language: ProgrammingLanguage
   currentRevision: number
   disabled?: boolean
+  hideHintButton?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -338,8 +339,12 @@ onBeforeUnmount(() => {
     class="coach-assist-actions"
     aria-label="추가 AI 코칭 요청"
   >
-    <div class="assist-buttons">
+    <div
+      class="assist-buttons"
+      :class="{ 'review-only': hideHintButton }"
+    >
       <button
+        v-if="!hideHintButton"
         type="button"
         class="assist-button"
         :disabled="busy || hintExhausted"
@@ -407,6 +412,10 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.assist-buttons.review-only {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .assist-button {
