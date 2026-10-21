@@ -18,6 +18,10 @@ import SessionCompletionPanel from '@/components/SessionCompletionPanel.vue'
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
 import { analyzeCode } from '@/services/analysis'
+import {
+  AUTO_STABLE_MS, AUTO_REFLECTION_MS, AUTO_WINDOW_MS,
+  AUTO_MAX_PER_SESSION, evaluateAutoAnalysisBudget,
+} from '@/services/autonomous-analysis-policy'
 import { hasEditedReportedIssueLine } from '@/services/issue-recovery'
 
 import {
@@ -137,10 +141,12 @@ const errorMessage = ref('')
 // Automatic analysis
 // --------------------------------------------------
 
-const MAX_AUTO_ANALYSES = 3
+const MAX_AUTO_ANALYSES = AUTO_MAX_PER_SESSION
 
 const autoAnalysisEnabled = ref(true)
 const autoAnalysisCalls = ref(0)
+const autoRequestTimes = ref<number[]>([])
+const autoScheduleStatus = ref<string | null>(null)
 
 const isAutoAnalyzing = ref(false)
 const autoAnalysisResult = ref<AnalysisResult | null>(null)
@@ -230,7 +236,7 @@ type ObservationPhase =
   | 'editing'
   | 'settled'
 
-const OBSERVATION_DELAY_MS = 800
+const OBSERVATION_DELAY_MS = AUTO_STABLE_MS
 
 const observationPhase = ref<ObservationPhase>('waiting')
 const stableSnapshot = ref<CodeSnapshot | null>(null)
@@ -400,37 +406,41 @@ const latestCoachingText = computed<string | null>(() => {
 // Automatic analysis eligibility
 // --------------------------------------------------
 
-function considerAutomaticAnalysis(
+
+let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearAutoAnalysisTimer() {
+  if (autoAnalysisTimer !== null) {
+    clearTimeout(autoAnalysisTimer)
+    autoAnalysisTimer = null
+  }
+}
+
+function scheduleAutomaticAnalysis(
   snapshot: CodeSnapshot,
+  waitMs = AUTO_REFLECTION_MS,
 ) {
-  if (completionOutcome.value !== null) {
+  clearAutoAnalysisTimer()
+
+  if (!autoAnalysisEnabled.value || completionOutcome.value !== null) {
     return
   }
 
-  const nowMs = Date.now()
+  autoScheduleStatus.value = '코드 안정 · 분석 시점까지 관찰 중'
 
-  const decision = evaluateAnalysisTrigger(
-    snapshot,
-    lastSuggestion.value,
-    nowMs,
-    {
-      recheckEditedIssue:
-        issueRecovery.value?.phase === 'pending' &&
-        editedReportedIssue(snapshot),
-    },
-  )
+  autoAnalysisTimer = setTimeout(() => {
+    autoAnalysisTimer = null
+    considerAutomaticAnalysis(snapshot)
+  }, waitMs)
+}
 
-  triggerDecision.value = decision
-
-  if (!decision.eligible) {
-    return
-  }
-
-  if (!autoAnalysisEnabled.value) {
-    return
-  }
-
+function considerAutomaticAnalysis(snapshot: CodeSnapshot) {
   if (
+    completionOutcome.value !== null ||
+    !autoAnalysisEnabled.value ||
+    snapshot.revision !== codeRevision.value ||
+    snapshot.language !== selectedLanguage.value ||
+    snapshot.code !== currentCode.value ||
     isAnalyzing.value ||
     isAutoAnalyzing.value ||
     autoAnalysisLimitReached.value
@@ -438,10 +448,65 @@ function considerAutomaticAnalysis(
     return
   }
 
+  const nowMs = Date.now()
+
+  const priorityRecheck =
+    issueRecovery.value?.phase === 'pending' &&
+    editedReportedIssue(snapshot)
+
+  const decision = evaluateAnalysisTrigger(
+    snapshot,
+    lastSuggestion.value,
+    nowMs,
+    { recheckEditedIssue: priorityRecheck },
+  )
+
+  triggerDecision.value = decision
+
+  if (!decision.eligible) {
+    autoScheduleStatus.value = null
+
+    if (decision.reason === 'COOLDOWN' && lastSuggestion.value) {
+      const remaining =
+        lastSuggestion.value.suggestedAtMs + 10_000 - nowMs
+
+      scheduleAutomaticAnalysis(
+        snapshot,
+        Math.max(1, remaining),
+      )
+    }
+
+    return
+  }
+
+  const budget = evaluateAutoAnalysisBudget(
+    nowMs,
+    autoRequestTimes.value,
+    autoAnalysisCalls.value,
+    priorityRecheck,
+  )
+
+  if (!budget.allowed) {
+    if (budget.waitMs > 0) {
+      scheduleAutomaticAnalysis(snapshot, budget.waitMs)
+    }
+
+    autoScheduleStatus.value =
+      budget.reason === 'WINDOW_BUDGET'
+        ? '최근 자동 분석 요청량이 많아 잠시 대기 중'
+        : budget.reason === 'SESSION_BUDGET'
+          ? '이번 세션의 자동 분석 예산을 모두 사용했습니다.'
+          : '요청 간격 조절 중 · 새 코드 상태를 관찰하고 있습니다.'
+
+    return
+  }
+
   lastSuggestion.value = {
     snapshot,
     suggestedAtMs: nowMs,
   }
+
+  autoScheduleStatus.value = null
 
   void runAutomaticAnalysis(snapshot)
 }
@@ -459,6 +524,8 @@ watch([selectedLanguage, currentCode], () => {
 
   analysisResult.value = null
   errorMessage.value = ''
+  clearAutoAnalysisTimer()
+  autoScheduleStatus.value = null
 
   autoAbortController?.abort()
   autoAbortController = null
@@ -499,7 +566,7 @@ watch([selectedLanguage, currentCode], () => {
     stableSnapshot.value = snapshot
     observationPhase.value = 'settled'
 
-    considerAutomaticAnalysis(snapshot)
+    scheduleAutomaticAnalysis(snapshot)
   }, OBSERVATION_DELAY_MS)
 })
 
@@ -509,6 +576,8 @@ watch([selectedLanguage, currentCode], () => {
 
 watch(autoAnalysisEnabled, (enabled) => {
   if (!enabled) {
+    clearAutoAnalysisTimer()
+    autoScheduleStatus.value = null
     autoAbortController?.abort()
     autoAbortController = null
 
@@ -539,7 +608,7 @@ watch(autoAnalysisEnabled, (enabled) => {
     snapshot.language === selectedLanguage.value &&
     snapshot.code === currentCode.value
   ) {
-    considerAutomaticAnalysis(snapshot)
+    scheduleAutomaticAnalysis(snapshot)
   }
 })
 
@@ -642,7 +711,17 @@ async function runAutomaticAnalysis(
   const controller = new AbortController()
   autoAbortController = controller
 
+  // Dispatched requests count even if later cancelled.
+  const requestedAtMs = Date.now()
+
   autoAnalysisCalls.value += 1
+
+  autoRequestTimes.value = [
+    ...autoRequestTimes.value.filter(
+      (time) => requestedAtMs - time < AUTO_WINDOW_MS,
+    ),
+    requestedAtMs,
+  ]
 
   markIssueChecking(snapshot)
   isAutoAnalyzing.value = true
@@ -799,6 +878,8 @@ function handleSessionCompleted(
   }
 
   autoAnalysisEnabled.value = false
+  clearAutoAnalysisTimer()
+  autoScheduleStatus.value = null
 
   autoAbortController?.abort()
   autoAbortController = null
@@ -828,6 +909,7 @@ function handleSessionCompleted(
 // --------------------------------------------------
 
 onBeforeUnmount(() => {
+  clearAutoAnalysisTimer()
   if (observationTimer !== null) {
     clearTimeout(observationTimer)
     observationTimer = null
@@ -1134,6 +1216,7 @@ function returnToProblemInput() {
             v-model:auto-enabled="autoAnalysisEnabled"
             :auto-analysis-calls="autoAnalysisCalls"
             :max-auto-analyses="MAX_AUTO_ANALYSES"
+            :auto-schedule-status="autoScheduleStatus"
             :current-revision="codeRevision"
             :observation-phase="observationPhase"
             :is-auto-analyzing="isAutoAnalyzing"

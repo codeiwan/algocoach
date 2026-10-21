@@ -12,6 +12,7 @@ const props = defineProps<{
   autoEnabled: boolean
   autoAnalysisCalls: number
   maxAutoAnalyses: number
+  autoScheduleStatus?: string | null
   currentRevision: number
   observationPhase: ObservationPhase
   isAutoAnalyzing: boolean
@@ -157,6 +158,13 @@ const activity = computed<{
     return {
       text: '자동 분석 한도 도달 · 추가 자동 요청 없음',
       tone: 'warning',
+    }
+  }
+
+  if (props.autoScheduleStatus) {
+    return {
+      text: props.autoScheduleStatus,
+      tone: 'idle',
     }
   }
 

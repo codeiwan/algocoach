@@ -2,7 +2,7 @@
 import type { AnalysisResult, CodeIssue } from '@/types/analysis'
 
 // Minimum time between delivered coaching messages.
-export const INTERVENTION_COOLDOWN_MS = 60_000
+export const INTERVENTION_COOLDOWN_MS = 25_000
 
 export type InterventionKind = 'issue' | 'praise'
 
