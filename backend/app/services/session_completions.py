@@ -10,12 +10,12 @@ from app.schemas.session_completion import (
 
 
 class SessionAlreadyCompleted(Exception):
-    """Raised when a finished session receives conflicting data."""
+    """Raised when a completed session receives conflicting data."""
 
 
 @dataclass(frozen=True, slots=True)
 class CompletionOutcome:
-    """Receipt plus information about whether it was newly created."""
+    """Receipt and whether it was newly created."""
 
     receipt: SessionCompletionReceipt
     created: bool
@@ -23,7 +23,7 @@ class CompletionOutcome:
 
 @dataclass(frozen=True, slots=True)
 class _StoredCompletion:
-    """Internal record of an accepted completion request."""
+    """Internal immutable completion record."""
 
     request: SessionCompletionRequest
     receipt: SessionCompletionReceipt
@@ -31,15 +31,13 @@ class _StoredCompletion:
 
 class SessionCompletionStore:
     """
-    Store session completions in application memory.
+    Store session completion records in application memory.
 
-    Guarantees within one server process:
-    - One completion record per session ID.
-    - Identical retries return the same receipt.
+    Guarantees within one process:
+    - One completion per session ID.
+    - Identical retries return the existing receipt.
     - Conflicting retries are rejected.
     - Concurrent requests are serialized.
-
-    Records are lost when the server process restarts.
     """
 
     def __init__(self) -> None:
@@ -50,20 +48,18 @@ class SessionCompletionStore:
         self,
         request: SessionCompletionRequest,
     ) -> CompletionOutcome:
-        """Create or return the immutable completion record."""
+        """Create or return an existing completion record."""
 
         async with self._lock:
             existing = self._records.get(request.session_id)
 
             if existing is not None:
-                # An identical retry is safe and idempotent.
                 if existing.request == request:
                     return CompletionOutcome(
                         receipt=existing.receipt.model_copy(deep=True),
                         created=False,
                     )
 
-                # A completed session cannot be overwritten.
                 raise SessionAlreadyCompleted(
                     "Session completion already exists "
                     "with different information."
@@ -85,8 +81,6 @@ class SessionCompletionStore:
                 completed_at=datetime.now(timezone.utc),
             )
 
-            # Preserve the original accepted request for
-            # idempotency checks and future session records.
             self._records[request.session_id] = _StoredCompletion(
                 request=request.model_copy(deep=True),
                 receipt=receipt.model_copy(deep=True),
@@ -96,3 +90,21 @@ class SessionCompletionStore:
                 receipt=receipt,
                 created=True,
             )
+
+    async def get_receipt(
+        self,
+        session_id: str,
+    ) -> SessionCompletionReceipt | None:
+        """
+        Return a completion receipt if this session is finished.
+
+        A deep copy prevents callers from mutating stored data.
+        """
+
+        async with self._lock:
+            record = self._records.get(session_id)
+
+            if record is None:
+                return None
+
+            return record.receipt.model_copy(deep=True)

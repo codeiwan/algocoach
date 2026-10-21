@@ -10,6 +10,9 @@ from app.api.problems import router as problems_router
 from app.api.session_completion import (
     router as session_completion_router,
 )
+from app.api.session_feedback import (
+    router as session_feedback_router,
+)
 from app.api.submission import router as submission_router
 from app.core.config import Settings
 from app.llm.factory import create_llm_provider
@@ -17,6 +20,9 @@ from app.llm.provider import LLMProvider
 from app.services.hint_sessions import HintSessionStore
 from app.services.session_completions import (
     SessionCompletionStore,
+)
+from app.services.session_feedback import (
+    SessionFeedbackStore,
 )
 
 
@@ -40,14 +46,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.llm_provider = provider
 
-    # Existing code analysis graph.
-    app.state.analysis_graph = create_analysis_graph(provider)
+    # Existing LangGraph code analysis.
+    app.state.analysis_graph = create_analysis_graph(
+        provider
+    )
 
-    # Existing progressive hint session state.
+    # Progressive hint records.
     app.state.hint_session_store = HintSessionStore()
 
-    # New coding session completion records.
-    app.state.session_completion_store = SessionCompletionStore()
+    # Session completion records.
+    completion_store = SessionCompletionStore()
+
+    app.state.session_completion_store = completion_store
+
+    # Feedback depends on the same completion store.
+    app.state.session_feedback_store = SessionFeedbackStore(
+        completion_store=completion_store,
+    )
 
     try:
         yield
@@ -72,6 +87,7 @@ app.include_router(problems_router)
 app.include_router(hints_router)
 app.include_router(submission_router)
 app.include_router(session_completion_router)
+app.include_router(session_feedback_router)
 
 
 # --------------------------------------------------
