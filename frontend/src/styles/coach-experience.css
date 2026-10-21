@@ -1,13 +1,15 @@
 /*
  * AlgoCoach Agent Experience
  *
- * The right panel is divided into:
+ * Stage 5.10B
  *
- * 1. Fixed agent header and live status.
- * 2. Independently scrolling coaching messages.
- * 3. Bottom interaction controls.
+ * Visual priority:
+ * 1. Latest coaching/conversation
+ * 2. Previous coaching history
+ * 3. Bottom interaction controls
  *
- * No LLM requests are initiated from this stylesheet.
+ * Preserves independent scrolling and
+ * existing agent functionality.
  */
 
 /* --------------------------------------------------
@@ -70,7 +72,242 @@
 }
 
 /* --------------------------------------------------
-   Bottom action dock
+   Stage 5.10B: Latest conversation emphasis
+-------------------------------------------------- */
+
+#app .coach-panel .latest-section {
+  gap: 10px;
+}
+
+#app .coach-panel .latest-section > .section-heading {
+  padding: 1px 3px;
+}
+
+#app .coach-panel .latest-section > .section-heading strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+#app .coach-panel .latest-section > .section-heading span {
+  color: #64748b;
+  font-size: 10px;
+}
+
+/*
+ * Give the current message a clear focal point,
+ * without using an excessively heavy shadow.
+ */
+
+#app .coach-panel .latest-section .latest-card {
+  padding: 17px 16px;
+
+  border: 1px solid #bfdbfe;
+  border-left: 4px solid #3b82f6;
+
+  border-radius: 12px;
+
+  background: #f3f8ff;
+
+  box-shadow:
+    0 3px 12px rgba(15, 23, 42, 0.055);
+}
+
+/* Latest issue */
+
+#app .coach-panel .latest-section .latest-card.issue,
+#app .coach-panel .latest-section .latest-card.recovery-issues_found,
+#app .coach-panel .latest-section .latest-card.recovery-failed {
+  border-color: #fed7aa;
+  border-left-color: #f59e0b;
+  background: #fffaf1;
+}
+
+/* Latest positive feedback */
+
+#app .coach-panel .latest-section .latest-card.praise,
+#app .coach-panel .latest-section .latest-card.recovery-cleared {
+  border-color: #bbf7d0;
+  border-left-color: #22c55e;
+  background: #f0fdf4;
+}
+
+/* Latest message metadata */
+
+#app .coach-panel .latest-card .latest-meta {
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+#app .coach-panel .latest-card .message-label {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+#app .coach-panel .latest-card .message-revision {
+  color: #94a3b8;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* Latest coaching body */
+
+#app .coach-panel .latest-card .message-body {
+  color: #1e293b;
+
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.8;
+
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Latest question and answer */
+
+#app .coach-panel .latest-card .user-message,
+#app .coach-panel .latest-card .assistant-message {
+  padding: 12px;
+}
+
+#app .coach-panel .latest-card .user-message p,
+#app .coach-panel .latest-card .assistant-message p {
+  color: #1e293b;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+#app .coach-panel .latest-card .assistant-message {
+  background: #dbeafe;
+}
+
+#app .coach-panel .latest-card .user-message strong,
+#app .coach-panel .latest-card .assistant-message strong {
+  font-size: 11px;
+}
+
+/* Keep inline code readable and noticeable
+   within the latest coaching message. */
+
+#app .coach-panel .latest-card .coach-inline-code {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.09);
+  border-color: rgba(59, 130, 246, 0.15);
+}
+
+/* --------------------------------------------------
+   Stage 5.10B: Previous history de-emphasis
+-------------------------------------------------- */
+
+/*
+ * A divider separates the main response
+ * from the historical conversation.
+ */
+
+#app .coach-panel .history-section {
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 13px;
+
+  border-top: 1px solid #e2e8f0;
+}
+
+#app .coach-panel .history-section > .section-heading {
+  padding: 0 2px;
+}
+
+#app .coach-panel .history-section > .section-heading strong {
+  color: #64748b;
+
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#app .coach-panel .history-section > .section-heading span {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+/* Reduce visual mass between history cards. */
+
+#app .coach-panel .history-list {
+  gap: 7px;
+}
+
+#app .coach-panel .history-card {
+  padding: 11px 12px;
+
+  border: 1px solid #e8edf3;
+  border-radius: 9px;
+
+  background: #fafbfc;
+
+  box-shadow: none;
+}
+
+#app .coach-panel .history-card .history-meta {
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* Previously the bold heading could compete
+   with the latest message heading. */
+
+#app .coach-panel .history-card .history-meta strong {
+  color: #64748b;
+
+  font-size: 11px;
+  font-weight: 600;
+}
+
+#app .coach-panel .history-card .history-meta span {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+/* Older content remains fully accessible.
+   No line clamping or text hiding. */
+
+#app .coach-panel .history-card .message-body,
+#app .coach-panel .history-card .history-question {
+  color: #64748b;
+
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.65;
+
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#app .coach-panel .history-card .message-body strong,
+#app .coach-panel .history-card .history-question strong {
+  color: #475569;
+  font-size: inherit;
+  font-weight: 700;
+}
+
+/* Keep older code samples readable, but subdued. */
+
+#app .coach-panel .history-card .coach-inline-code {
+  padding: 0 3px;
+
+  border-color: #e2e8f0;
+
+  background: #eef2f7;
+  color: #475569;
+
+  font-size: 0.92em;
+}
+
+#app .coach-panel .history-card .historical-note {
+  color: #94a3b8;
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+/* --------------------------------------------------
+   Bottom action dock - existing functionality
 -------------------------------------------------- */
 
 #app .coach-panel .coach-content > .coach-action-dock {
@@ -104,9 +341,6 @@
   min-width: 0;
 }
 
-/* When question history becomes long, scroll within
-   its own section instead of expanding the viewport. */
-
 #app .coach-panel .coach-action-dock .question-panel {
   max-height: min(40dvh, 380px);
 
@@ -115,9 +349,6 @@
 
   scrollbar-width: thin;
 }
-
-/* Preserve hint/review tools without allowing them
-   to consume the entire agent panel height. */
 
 #app .coach-panel .secondary-tools[open] {
   max-height: min(35dvh, 320px);
@@ -131,7 +362,7 @@
 }
 
 /* --------------------------------------------------
-   Text wrapping and compatibility
+   Wrapping and compatibility
 -------------------------------------------------- */
 
 #app .coach-panel .coach-content p,
@@ -159,6 +390,14 @@
   #app .coach-panel > .coach-content {
     padding: 10px;
     gap: 8px;
+  }
+
+  #app .coach-panel .latest-section .latest-card {
+    padding: 14px 12px;
+  }
+
+  #app .coach-panel .latest-card .message-body {
+    font-size: 13px;
   }
 
   #app .coach-panel .coach-content > .coach-action-dock {
