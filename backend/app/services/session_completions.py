@@ -38,16 +38,12 @@ class SessionCompletionStore:
     Database location:
     - Default: backend/data/algocoach.sqlite3
     - Optional: custom db_path for testing
-
-    Runtime data is excluded from Git using backend/data/.gitignore.
     """
 
     def __init__(
         self,
         db_path: str | Path | None = None,
     ) -> None:
-        # Resolve the backend directory from this source file.
-        # This does not depend on the current working directory.
         backend_root = Path(__file__).resolve().parents[2]
 
         default_path = (
@@ -68,6 +64,15 @@ class SessionCompletionStore:
         self._lock = asyncio.Lock()
 
         self._initialize_database()
+
+    @property
+    def db_path(self) -> Path:
+        """
+        Return the SQLite path used by this store.
+
+        Other session-related stores can share the same DB.
+        """
+        return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
         """Open a short-lived database connection."""
@@ -185,8 +190,7 @@ class SessionCompletionStore:
         """
         Retrieve a completed session's receipt.
 
-        The feedback service uses this to verify that
-        a session was completed before accepting feedback.
+        A missing completion returns None.
         """
 
         async with self._lock:

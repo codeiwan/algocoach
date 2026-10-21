@@ -1,6 +1,9 @@
 import asyncio
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.schemas.session_feedback import (
     SessionFeedbackReceipt,
@@ -12,11 +15,11 @@ from app.services.session_completions import (
 
 
 class SessionNotCompleted(Exception):
-    """Raised when feedback is sent for a session not completed."""
+    """Raised when feedback is sent for an incomplete session."""
 
 
 class SessionFeedbackAlreadyRecorded(Exception):
-    """Raised when existing feedback is changed after recording."""
+    """Raised when an existing feedback record is changed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,82 +30,156 @@ class FeedbackOutcome:
     created: bool
 
 
-@dataclass(frozen=True, slots=True)
-class _StoredFeedback:
-    """Internal record of accepted learner feedback."""
-
-    request: SessionFeedbackRequest
-    receipt: SessionFeedbackReceipt
-
-
 class SessionFeedbackStore:
     """
-    Store one feedback record per completed coding session.
+    Persist one feedback record per completed coding session.
 
-    This is an in-memory development implementation.
+    The completion store and feedback store share one SQLite DB.
 
-    Guarantees within one application process:
-    - Feedback requires a completed session.
-    - One feedback record per session.
-    - Identical retries are idempotent.
+    Guarantees:
+    - Feedback requires an existing completion record.
+    - One feedback record per session ID.
+    - Identical retries return the original receipt.
     - Conflicting retries are rejected.
-    - Concurrent requests are serialized.
+    - Records survive application restarts.
+    - Concurrent writers are protected by SQLite transactions.
     """
 
     def __init__(
         self,
         completion_store: SessionCompletionStore,
     ) -> None:
-        self._completion_store = completion_store
-
-        self._records: dict[str, _StoredFeedback] = {}
+        self._db_path: Path = completion_store.db_path
         self._lock = asyncio.Lock()
+
+        self._initialize_database()
+
+    def _connect(self) -> sqlite3.Connection:
+        """Open a connection to the shared session database."""
+
+        return sqlite3.connect(
+            self._db_path,
+            timeout=10.0,
+        )
+
+    def _initialize_database(self) -> None:
+        """Create the feedback table if it does not exist."""
+
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_feedback (
+                    session_id TEXT PRIMARY KEY,
+                    request_json TEXT NOT NULL,
+                    receipt_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.commit()
 
     async def record(
         self,
         request: SessionFeedbackRequest,
     ) -> FeedbackOutcome:
         """
-        Record feedback for a completed session.
+        Persist learner-reported coaching feedback.
 
-        The accepted request is preserved for safe retries.
+        The same transaction checks existing feedback,
+        verifies session completion, and inserts a new record.
         """
 
         async with self._lock:
-            existing = self._records.get(request.session_id)
+            with closing(self._connect()) as connection:
+                with connection:
+                    connection.execute("BEGIN IMMEDIATE")
 
-            if existing is not None:
-                if existing.request == request:
-                    return FeedbackOutcome(
-                        receipt=existing.receipt.model_copy(deep=True),
-                        created=False,
+                    # ------------------------------------------
+                    # 1. Check for an existing feedback record.
+                    # ------------------------------------------
+
+                    row = connection.execute(
+                        """
+                        SELECT request_json, receipt_json
+                        FROM session_feedback
+                        WHERE session_id = ?
+                        """,
+                        (request.session_id,),
+                    ).fetchone()
+
+                    if row is not None:
+                        original_request = (
+                            SessionFeedbackRequest.model_validate_json(
+                                row[0]
+                            )
+                        )
+
+                        if original_request != request:
+                            raise SessionFeedbackAlreadyRecorded(
+                                "This session already has "
+                                "different feedback."
+                            )
+
+                        original_receipt = (
+                            SessionFeedbackReceipt.model_validate_json(
+                                row[1]
+                            )
+                        )
+
+                        return FeedbackOutcome(
+                            receipt=original_receipt,
+                            created=False,
+                        )
+
+                    # ------------------------------------------
+                    # 2. Verify that the session was completed.
+                    # ------------------------------------------
+
+                    completed = connection.execute(
+                        """
+                        SELECT 1
+                        FROM session_completions
+                        WHERE session_id = ?
+                        """,
+                        (request.session_id,),
+                    ).fetchone()
+
+                    if completed is None:
+                        raise SessionNotCompleted(
+                            "Feedback is allowed only after "
+                            "session completion."
+                        )
+
+                    # ------------------------------------------
+                    # 3. Generate the server receipt.
+                    # ------------------------------------------
+
+                    receipt = SessionFeedbackReceipt(
+                        session_id=request.session_id,
+                        status="RECORDED",
+                        recorded_at=datetime.now(timezone.utc),
                     )
 
-                raise SessionFeedbackAlreadyRecorded(
-                    "This session already has different feedback."
-                )
+                    # ------------------------------------------
+                    # 4. Persist feedback and receipt atomically.
+                    # ------------------------------------------
 
-            completion = await self._completion_store.get_receipt(
-                request.session_id
-            )
+                    connection.execute(
+                        """
+                        INSERT INTO session_feedback (
+                            session_id,
+                            request_json,
+                            receipt_json
+                        )
+                        VALUES (?, ?, ?)
+                        """,
+                        (
+                            request.session_id,
+                            request.model_dump_json(),
+                            receipt.model_dump_json(),
+                        ),
+                    )
 
-            if completion is None:
-                raise SessionNotCompleted(
-                    "Feedback is allowed only after session completion."
-                )
-
-            receipt = SessionFeedbackReceipt(
-                session_id=request.session_id,
-                status="RECORDED",
-                recorded_at=datetime.now(timezone.utc),
-            )
-
-            self._records[request.session_id] = _StoredFeedback(
-                request=request.model_copy(deep=True),
-                receipt=receipt.model_copy(deep=True),
-            )
-
-            return FeedbackOutcome(
-                receipt=receipt,
-                created=True,
-            )
+                    return FeedbackOutcome(
+                        receipt=receipt,
+                        created=True,
+                    )
