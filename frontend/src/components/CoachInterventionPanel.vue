@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import {
+  computed,
+  onBeforeUnmount,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
 
 import {
   INTERVENTION_COOLDOWN_MS,
@@ -8,6 +14,7 @@ import {
   type InterventionCandidate,
   type InterventionReason,
 } from '@/services/intervention-policy'
+
 import type { AnalysisResult } from '@/types/analysis'
 import type { IssueRecoveryNotice } from '@/services/analysis-trigger'
 
@@ -18,7 +25,12 @@ const props = defineProps<{
 }>()
 
 type FeedbackSource = 'auto' | 'simulation'
-type DemoScenario = 'warning' | 'critical' | 'praise' | 'no_signal' | 'stale'
+type DemoScenario =
+  | 'warning'
+  | 'critical'
+  | 'praise'
+  | 'no_signal'
+  | 'stale'
 
 interface CoachMessage {
   id: number
@@ -27,9 +39,12 @@ interface CoachMessage {
   candidate: InterventionCandidate
 }
 
+// --------------------------------------------------
+// Coaching history
+// --------------------------------------------------
+
 const messages = ref<CoachMessage[]>([])
 
-// Real analysis and test simulation have separate histories.
 const lastAutoDelivered = ref<DeliveredIntervention | null>(null)
 const lastDemoDelivered = ref<DeliveredIntervention | null>(null)
 
@@ -39,10 +54,9 @@ const lastDemoReason = ref<InterventionReason | null>(null)
 let nextMessageId = 0
 
 // --------------------------------------------------
-// Pending interventions
+// Pending intervention handling
 // --------------------------------------------------
 
-// Automatic and simulated coaching have separate pending states.
 const pendingAutoResult = shallowRef<AnalysisResult | null>(null)
 const pendingDemoResult = shallowRef<AnalysisResult | null>(null)
 
@@ -60,9 +74,6 @@ function getPendingSlot(source: FeedbackSource) {
     : pendingDemoResult
 }
 
-/**
- * Cancel a scheduled intervention and discard its candidate.
- */
 function clearPending(source: FeedbackSource) {
   const timer = pendingTimers[source]
 
@@ -74,9 +85,6 @@ function clearPending(source: FeedbackSource) {
   getPendingSlot(source).value = null
 }
 
-/**
- * Re-evaluate a postponed analysis when its cooldown expires.
- */
 function schedulePending(
   result: AnalysisResult,
   source: FeedbackSource,
@@ -89,45 +97,35 @@ function schedulePending(
   pendingTimers[source] = setTimeout(() => {
     pendingTimers[source] = null
 
-    // Another result may have replaced this candidate.
     if (pendingSlot.value !== result) {
       return
     }
 
     pendingSlot.value = null
 
-    // The code must still be at the same revision.
     if (result.analyzed_revision !== props.currentRevision) {
       return
     }
 
-    // Real automatic analysis must still be the latest result.
-    if (source === 'auto' && props.analysisResult !== result) {
+    if (
+      source === 'auto' &&
+      props.analysisResult !== result
+    ) {
       return
     }
 
-    // Re-evaluate the policy instead of delivering unconditionally.
     processAnalysis(result, source)
   }, remainingMs)
 }
 
-const reasonLabels: Record<InterventionReason, string> = {
-  STALE_REVISION: '오래된 코드 분석 결과이므로 개입하지 않습니다.',
-  NO_SIGNAL: '코칭할 만한 구체적인 근거가 없어 관찰을 유지합니다.',
-  DUPLICATE: '이전에 전달한 메시지와 동일하여 생략합니다.',
-  COOLDOWN: '최근 코칭 이후 60초가 지나지 않아 개입을 보류합니다.',
-  ELIGIBLE: '개입 정책을 통과하여 코칭 메시지를 전달했습니다.',
-}
+// --------------------------------------------------
+// Existing intervention policy
+// --------------------------------------------------
 
-/**
- * Evaluate one analysis result and deliver a message only
- * when the Intervention Policy allows it.
- */
 function processAnalysis(
   result: AnalysisResult,
   source: FeedbackSource,
 ) {
-  // A newer evaluation replaces any previous pending candidate.
   clearPending(source)
 
   const nowMs = Date.now()
@@ -150,14 +148,13 @@ function processAnalysis(
     lastDemoReason.value = decision.reason
   }
 
-  // Handle decisions that should not be delivered immediately.
   if (!decision.eligible || !decision.candidate) {
-    // A cooldown-blocked candidate may be worth reconsidering later.
     if (
       decision.reason === 'COOLDOWN' &&
       lastDelivered !== null
     ) {
-      const elapsedMs = nowMs - lastDelivered.deliveredAtMs
+      const elapsedMs =
+        nowMs - lastDelivered.deliveredAtMs
 
       const remainingMs = Math.max(
         1,
@@ -172,7 +169,6 @@ function processAnalysis(
 
   const candidate = decision.candidate
 
-  // Record only messages that actually enter the coaching feed.
   const delivered: DeliveredIntervention = {
     fingerprint: candidate.fingerprint,
     deliveredAtMs: nowMs,
@@ -195,11 +191,13 @@ function processAnalysis(
   ].slice(0, 20)
 }
 
-// Observe results received from the actual LangGraph analysis API.
+// --------------------------------------------------
+// Watch actual AI analysis
+// --------------------------------------------------
+
 watch(
   () => props.analysisResult,
   (result) => {
-    // A new analysis result replaces the previous pending candidate.
     clearPending('auto')
 
     if (result !== null) {
@@ -208,7 +206,6 @@ watch(
   },
 )
 
-// Any code revision change invalidates postponed interventions.
 watch(
   () => props.currentRevision,
   () => {
@@ -217,10 +214,131 @@ watch(
   },
 )
 
-/**
- * Developer-only scenarios.
- * These do not call an LLM or modify actual analysis history.
- */
+// --------------------------------------------------
+// Agent presentation
+// --------------------------------------------------
+
+const recoveryDisplay = computed(() => {
+  switch (props.issueRecovery?.phase) {
+    case 'pending':
+      return {
+        tone: 'pending',
+        title: '수정한 코드를 확인할 준비가 됐어요',
+        description:
+          '이전에 지적한 코드 줄이 변경됐습니다. ' +
+          '재분석하기 전까지는 오류가 해결됐다고 판단하지 않겠습니다.',
+      }
+
+    case 'checking':
+      return {
+        tone: 'checking',
+        title: '수정한 코드를 다시 검토하고 있어요',
+        description:
+          '현재 코드 Revision에 대한 AI 분석 결과를 기다리고 있습니다.',
+      }
+
+    case 'cleared':
+      return {
+        tone: 'cleared',
+        title: '이전 경고가 최신 분석에서 재발견되지 않았어요',
+        description:
+          '수정한 코드의 최신 AI 분석에서는 이전 문제가 보고되지 않았습니다. ' +
+          '다만 실제 정답 판정이나 코드 실행을 의미하지는 않습니다.',
+      }
+
+    case 'issues_found':
+      return {
+        tone: 'issues_found',
+        title: '수정한 코드에서 확인할 부분이 남아 있어요',
+        description:
+          '최신 분석에 문제가 보고되었습니다. ' +
+          '이전 오류와 동일한 원인인지는 단정하지 않겠습니다.',
+      }
+
+    case 'failed':
+      return {
+        tone: 'failed',
+        title: '코드 재검증을 완료하지 못했어요',
+        description:
+          '이번 수정이 오류를 해결했는지는 아직 확인하지 못했습니다. ' +
+          '필요하면 현재 코드에 대한 피드백을 다시 요청해 주세요.',
+      }
+
+    default:
+      return null
+  }
+})
+
+const latestMessage = computed<CoachMessage | null>(() => {
+  // A recovery event is more recent than the old intervention.
+  // Show it first, and move previous messages to history.
+  if (recoveryDisplay.value !== null) {
+    return null
+  }
+
+  return messages.value[0] ?? null
+})
+
+const previousMessages = computed(() => {
+  return recoveryDisplay.value !== null
+    ? messages.value
+    : messages.value.slice(1)
+})
+
+const agentStatus = computed(() => {
+  if (props.issueRecovery?.phase === 'checking') {
+    return '수정한 코드의 AI 분석 응답을 기다리는 중'
+  }
+
+  if (props.issueRecovery?.phase === 'pending') {
+    return '코드 수정 감지 · 재검증 대기'
+  }
+
+  if (props.issueRecovery?.phase === 'failed') {
+    return '재검증 실패 · 다시 시도 가능'
+  }
+
+  if (props.issueRecovery?.phase === 'cleared') {
+    return '최신 코드 재검증 완료'
+  }
+
+  if (pendingAutoResult.value !== null) {
+    return '다음 코칭 개입 시점 대기 중'
+  }
+
+  const newest = messages.value[0]
+
+  if (
+    newest !== undefined &&
+    newest.revision !== props.currentRevision
+  ) {
+    return '코드 변경 확인 · 새 분석 결과 대기'
+  }
+
+  if (props.analysisResult !== null) {
+    return '최근 AI 분석 결과 확인 완료'
+  }
+
+  return '코칭 준비 · 새 분석 결과 대기'
+})
+
+const hasVisibleFeedback = computed(() => {
+  return (
+    recoveryDisplay.value !== null ||
+    latestMessage.value !== null
+  )
+})
+
+// --------------------------------------------------
+// Developer-only simulation
+// --------------------------------------------------
+
+const showDeveloperTools =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get(
+    'debugCoach',
+  ) === '1'
+
 function simulateScenario(scenario: DemoScenario) {
   const result: AnalysisResult = {
     analyzed_revision: props.currentRevision,
@@ -239,7 +357,7 @@ function simulateScenario(scenario: DemoScenario) {
           category: 'logic',
           severity: 'WARNING',
           description: '방문 처리 누락 가능성이 있습니다.',
-          evidence: '테스트 상황에서 방문 상태 갱신이 누락됐다고 가정합니다.',
+          evidence: '테스트용 일반 경고입니다.',
           line_start: 5,
           line_end: 5,
         },
@@ -247,7 +365,6 @@ function simulateScenario(scenario: DemoScenario) {
       break
 
     case 'critical':
-      // Include a warning to verify CRITICAL priority.
       result.issues = [
         {
           category: 'logic',
@@ -261,7 +378,7 @@ function simulateScenario(scenario: DemoScenario) {
           category: 'logic',
           severity: 'CRITICAL',
           description: '무한 루프가 발생할 가능성이 있습니다.',
-          evidence: '테스트 상황에서 반복 종료 조건이 없다고 가정합니다.',
+          evidence: '테스트용 심각한 경고입니다.',
           line_start: 8,
           line_end: 8,
         },
@@ -270,17 +387,16 @@ function simulateScenario(scenario: DemoScenario) {
 
     case 'praise':
       result.positive_observation =
-        '테스트용 칭찬: 중복 계산을 줄이는 효율적인 접근을 사용했습니다.'
+        '중복 계산을 줄이는 효율적인 접근을 사용했습니다.'
       break
 
     case 'no_signal':
-      // No issues or positive observations.
       break
 
     case 'stale':
       result.analyzed_revision = props.currentRevision + 1
       result.positive_observation =
-        '오래된 분석 결과는 화면에 전달되면 안 됩니다.'
+        '오래된 분석 결과는 전달되면 안 됩니다.'
       break
   }
 
@@ -288,13 +404,11 @@ function simulateScenario(scenario: DemoScenario) {
 }
 
 function resetSimulation() {
-  // Cancel any simulated message waiting for cooldown.
   clearPending('simulation')
 
   lastDemoDelivered.value = null
   lastDemoReason.value = null
 
-  // Preserve real automatic coaching messages.
   messages.value = messages.value.filter(
     (message) => message.source !== 'simulation',
   )
@@ -307,172 +421,230 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="coach-feedback">
-    <header class="feedback-header">
-      <h3>AI Coach 피드</h3>
-      <span class="feed-caption">Intervention Policy</span>
+  <section
+    class="coach-feedback"
+    aria-label="AlgoCoach 에이전트 피드"
+  >
+    <!-- Agent identity -->
+    <header class="agent-header">
+      <div class="agent-avatar" aria-hidden="true">
+        <div class="avatar-face">
+          <span class="avatar-eye" />
+          <span class="avatar-eye" />
+        </div>
+      </div>
+
+      <div class="agent-identity">
+        <strong>AlgoCoach</strong>
+        <span>AI CODING AGENT</span>
+      </div>
+
+      <span class="agent-dot" aria-hidden="true" />
     </header>
 
-    <div class="policy-status">
-      <strong>최근 자동 분석 판단</strong>
-
-      <p>
-        {{
-          lastAutoReason
-            ? reasonLabels[lastAutoReason]
-            : '아직 자동 분석에 대한 개입 판단이 없습니다.'
-        }}
-      </p>
-
-      <p v-if="pendingAutoResult" class="pending-note">
-        코칭 후보가 Cooldown 종료를 기다리고 있습니다.
-        현재 코드가 유지되면 자동으로 재평가합니다.
-      </p>
-    </div>
-
-    <!-- Recheck notices are independent of the 60-second coaching cooldown. -->
+    <!-- Actual state, not fabricated chain-of-thought -->
     <div
-      v-if="issueRecovery"
-      class="recovery-notice"
-      :class="`recovery-${issueRecovery.phase}`"
+      class="agent-status"
       role="status"
       aria-live="polite"
     >
-      <strong v-if="issueRecovery.phase === 'pending'">
-        경고 위치 수정 감지 · 재검증 대기
-      </strong>
-      <strong v-else-if="issueRecovery.phase === 'checking'">
-        수정한 코드 재검증 중
-      </strong>
-      <strong v-else-if="issueRecovery.phase === 'cleared'">
-        최신 분석에서 이전 경고가 재발견되지 않았습니다
-      </strong>
-      <strong v-else-if="issueRecovery.phase === 'issues_found'">
-        재검증 완료 · 검토할 내용이 남아 있습니다
-      </strong>
-      <strong v-else>
-        재검증 실패 · 다시 확인할 수 있습니다
-      </strong>
-
-      <p v-if="issueRecovery.phase === 'pending'">
-        지적된 줄이 변경됐습니다. 자동 분석이 OFF이거나 호출 한도에
-        도달했다면 수동 분석을 실행해 주세요. 수정만으로 오류 해결이
-        확정되지는 않습니다.
-      </p>
-      <p v-else-if="issueRecovery.phase === 'checking'">
-        현재 Revision을 AI로 확인하고 있습니다.
-      </p>
-      <p v-else-if="issueRecovery.phase === 'cleared'">
-        이전 경고가 최신 AI 분석에서 확인되지 않았습니다.
-        정답 판정이나 실제 코드 실행 결과를 의미하지는 않습니다.
-      </p>
-      <p v-else-if="issueRecovery.phase === 'issues_found'">
-        새 분석에 문제가 보고됐습니다. 최신 분석 결과를 확인해 주세요.
-        과거 경고와 동일한 문제인지는 단정하지 않습니다.
-      </p>
-      <p v-else>
-        기존 경고를 해결했다고 판단하지 않았습니다.
-        필요하면 수동 AI 분석으로 다시 확인해 주세요.
-      </p>
+      <span class="status-pulse" aria-hidden="true" />
+      <span>{{ agentStatus }}</span>
     </div>
 
-    <div v-if="messages.length === 0" class="feed-empty">
-      아직 전달된 코칭 메시지가 없습니다.
-      <p>
-        분석 근거가 부족하거나 개입 조건을 충족하지 않으면
-        AI Coach는 조용히 관찰합니다.
-      </p>
-    </div>
+    <!-- Latest message directly below the agent -->
+    <div class="latest-section" aria-live="polite">
+      <div class="section-heading">
+        <strong>최신 코칭</strong>
+        <span>
+          Revision {{ currentRevision }}
+        </span>
+      </div>
 
-    <div v-else class="message-list" aria-live="polite">
       <article
-        v-for="message in messages"
-        :key="message.id"
-        class="coach-message"
-        :class="message.candidate.kind"
+        v-if="recoveryDisplay"
+        class="latest-card recovery-card"
+        :class="`recovery-${recoveryDisplay.tone}`"
       >
-        <div class="message-meta">
-          <strong>
-            {{ message.candidate.kind === 'issue' ? '코드 점검' : '긍정적 피드백' }}
-          </strong>
+        <span class="message-label">
+          코드 수정 재검증
+        </span>
 
-          <span>
-            {{ message.source === 'simulation' ? '시뮬레이션' : '자동 분석' }}
-            · Revision {{ message.revision }}
+        <h3>{{ recoveryDisplay.title }}</h3>
+        <p>{{ recoveryDisplay.description }}</p>
+      </article>
+
+      <article
+        v-else-if="latestMessage"
+        class="latest-card"
+        :class="latestMessage.candidate.kind"
+      >
+        <div class="latest-meta">
+          <span class="message-label">
+            {{
+              latestMessage.candidate.kind === 'issue'
+                ? '코드에서 확인할 부분'
+                : '긍정적 코칭'
+            }}
+          </span>
+
+          <span class="message-revision">
+            Revision {{ latestMessage.revision }}
           </span>
         </div>
 
-        <p class="message-text">
-          {{ message.candidate.message }}
+        <p class="message-body">
+          {{ latestMessage.candidate.message }}
         </p>
 
         <p
-          v-if="
-            message.source === 'auto' &&
-            message.candidate.kind === 'issue' &&
-            issueRecovery?.originRevision === message.revision
-          "
-          class="outdated-note"
+          v-if="latestMessage.revision !== currentRevision"
+          class="historical-note"
         >
-          {{
-            issueRecovery?.phase === 'cleared'
-              ? '이전 경고: 최신 분석에서는 재발견되지 않았습니다.'
-              : issueRecovery?.phase === 'pending' || issueRecovery?.phase === 'checking'
-                ? '이 경고가 지적한 코드 줄이 수정되어 재검증을 기다리거나 진행 중입니다.'
-                : '이전 경고입니다. 최신 분석을 기준으로 다시 확인해 주세요.'
-          }}
-        </p>
-        <p
-          v-else-if="message.revision !== currentRevision"
-          class="outdated-note"
-        >
-          이전 코드 Revision에서 전달된 메시지입니다.
+          현재 코드가 아닌 이전 Revision에 대한 의견입니다.
         </p>
       </article>
+
+      <div
+        v-else
+        class="empty-coaching"
+      >
+        <strong>지금은 전달할 코칭이 없습니다.</strong>
+        <p>
+          분석에서 구체적인 지도 근거가 확인되면
+          가장 최근 코칭을 이곳에 보여드립니다.
+        </p>
+      </div>
     </div>
 
-    <!-- Hidden by default: developer testing tools. -->
-    <details class="demo-tools">
+    <!-- Previous coaching appears below latest -->
+    <section
+      v-if="previousMessages.length > 0"
+      class="history-section"
+    >
+      <div class="section-heading">
+        <strong>이전 코칭</strong>
+        <span>{{ previousMessages.length }}개</span>
+      </div>
+
+      <div class="history-list">
+        <article
+          v-for="message in previousMessages"
+          :key="message.id"
+          class="history-card"
+          :class="message.candidate.kind"
+        >
+          <div class="history-meta">
+            <strong>
+              {{
+                message.candidate.kind === 'issue'
+                  ? '코드 점검'
+                  : '긍정적 피드백'
+              }}
+            </strong>
+
+            <span>
+              Revision {{ message.revision }}
+            </span>
+          </div>
+
+          <p class="message-body">
+            {{ message.candidate.message }}
+          </p>
+
+          <p
+            v-if="
+              message.source === 'auto' &&
+              message.candidate.kind === 'issue' &&
+              issueRecovery?.originRevision === message.revision
+            "
+            class="historical-note"
+          >
+            {{
+              issueRecovery?.phase === 'cleared'
+                ? '최신 분석에서는 이 경고가 재발견되지 않았습니다.'
+                : '이전에 지적된 내용입니다. 현재 코드에서 다시 확인해 주세요.'
+            }}
+          </p>
+
+          <p
+            v-else-if="message.revision !== currentRevision"
+            class="historical-note"
+          >
+            이전 코드 Revision에서 받은 피드백입니다.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <p
+      v-if="!hasVisibleFeedback && lastAutoReason === 'NO_SIGNAL'"
+      class="quiet-note"
+    >
+      현재 분석에서 별도로 개입할 근거가 확인되지 않았습니다.
+    </p>
+
+    <!-- Hidden on the normal user screen -->
+    <details
+      v-if="showDeveloperTools"
+      class="developer-tools"
+    >
       <summary>개발용 코칭 시뮬레이션</summary>
 
-      <p class="demo-description">
-        아래 버튼은 실제 코드를 분석하지 않습니다.
-        가상의 AI 분석 결과로 개입 정책을 검증합니다.
+      <p>
+        실제 LLM을 호출하지 않고 개입 정책만 검증합니다.
       </p>
 
-      <div class="demo-buttons">
-        <button type="button" @click="simulateScenario('warning')">
+      <div class="simulation-buttons">
+        <button
+          type="button"
+          @click="simulateScenario('warning')"
+        >
           일반 경고
         </button>
 
-        <button type="button" @click="simulateScenario('critical')">
+        <button
+          type="button"
+          @click="simulateScenario('critical')"
+        >
           심각한 경고
         </button>
 
-        <button type="button" @click="simulateScenario('praise')">
+        <button
+          type="button"
+          @click="simulateScenario('praise')"
+        >
           칭찬
         </button>
 
-        <button type="button" @click="simulateScenario('no_signal')">
+        <button
+          type="button"
+          @click="simulateScenario('no_signal')"
+        >
           신호 없음
         </button>
 
-        <button type="button" @click="simulateScenario('stale')">
+        <button
+          type="button"
+          @click="simulateScenario('stale')"
+        >
           오래된 결과
         </button>
 
         <button
           type="button"
-          class="reset-button"
           @click="resetSimulation"
         >
           테스트 초기화
         </button>
       </div>
 
-      <p v-if="pendingDemoResult" class="pending-note">
-        테스트 코칭 후보 대기 중입니다.
-        Cooldown 종료 시 다시 판단합니다.
+      <p v-if="pendingDemoResult">
+        시뮬레이션 개입 후보 대기 중
+      </p>
+
+      <p v-if="lastDemoReason">
+        마지막 시뮬레이션 판단: {{ lastDemoReason }}
       </p>
     </details>
   </section>
@@ -480,202 +652,296 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .coach-feedback {
-  padding: 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
-.feedback-header {
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 17px 15px;
+  border: 1px solid #c7d2fe;
+  border-radius: 14px;
+  background: linear-gradient(
+    135deg,
+    #eff6ff 0%,
+    #eef2ff 100%
+  );
+}
+
+.agent-avatar {
+  display: flex;
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: linear-gradient(
+    135deg,
+    #2563eb,
+    #4f46e5
+  );
+  box-shadow: 0 6px 18px rgb(37 99 235 / 20%);
+}
+
+.avatar-face {
+  display: flex;
+  width: 39px;
+  height: 28px;
+  align-items: center;
+  justify-content: space-evenly;
+  border-radius: 10px;
+  background: white;
+}
+
+.avatar-eye {
+  width: 7px;
+  height: 9px;
+  border-radius: 5px;
+  background: #2563eb;
+}
+
+.agent-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agent-identity strong {
+  color: #0f172a;
+  font-size: 18px;
+  letter-spacing: -0.025em;
+}
+
+.agent-identity span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.agent-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #16a34a;
+}
+
+.agent-status {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.status-pulse {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.latest-section,
+.history-section {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.section-heading,
+.latest-meta,
+.history-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 16px;
 }
 
-.feedback-header h3 {
-  margin: 0;
-  font-size: 14px;
+.section-heading {
+  padding: 0 2px;
 }
 
-.feed-caption {
-  color: #64748b;
-  font-size: 11px;
-}
-
-.policy-status {
-  padding: 12px;
-  border-radius: 8px;
-  background: #f1f5f9;
-}
-
-.policy-status strong {
-  font-size: 12px;
-}
-
-.policy-status p {
-  margin: 6px 0 0;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.recovery-notice {
-  margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.recovery-notice strong {
+.section-heading strong {
   color: #334155;
   font-size: 12px;
 }
 
-.recovery-notice p {
-  margin: 7px 0 0;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.7;
+.section-heading span,
+.message-revision,
+.history-meta span {
+  color: #94a3b8;
+  font-size: 10px;
 }
 
-.recovery-notice.recovery-cleared {
+.latest-card,
+.empty-coaching {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+.latest-card.issue {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.latest-card.praise,
+.latest-card.recovery-cleared {
   border-color: #bbf7d0;
   background: #f0fdf4;
 }
 
-.recovery-notice.recovery-cleared strong {
+.latest-card.recovery-issues_found,
+.latest-card.recovery-failed {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.latest-card.recovery-checking,
+.latest-card.recovery-pending {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.message-label {
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.latest-card.issue .message-label,
+.latest-card.recovery-issues_found .message-label,
+.latest-card.recovery-failed .message-label {
+  color: #9a3412;
+}
+
+.latest-card.praise .message-label,
+.latest-card.recovery-cleared .message-label {
   color: #166534;
 }
 
-.recovery-notice.recovery-issues_found,
-.recovery-notice.recovery-failed {
-  border-color: #fed7aa;
-  background: #fffbeb;
+.latest-card h3 {
+  margin: 10px 0 7px;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
-.feed-empty {
-  padding: 24px 4px;
-  color: #64748b;
-  font-size: 13px;
-  line-height: 1.7;
-  text-align: center;
-}
-
-.feed-empty p {
+.latest-card p,
+.history-card p {
   margin: 8px 0 0;
-  font-size: 12px;
-}
-
-.message-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.coach-message {
-  padding: 14px;
-  border: 1px solid #e2e8f0;
-  border-left: 3px solid #94a3b8;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
-.coach-message.issue {
-  border-left-color: #d97706;
-}
-
-.coach-message.praise {
-  border-left-color: #16a34a;
-}
-
-.message-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.message-meta strong {
-  font-size: 13px;
-}
-
-.message-meta span {
-  color: #64748b;
-  font-size: 11px;
-}
-
-.message-text {
-  margin: 12px 0 0;
-  font-size: 13px;
   line-height: 1.7;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.outdated-note {
-  margin: 10px 0 0;
+.message-body {
+  color: #334155;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.recovery-card > p {
+  color: #475569;
+  font-size: 12px;
+}
+
+.empty-coaching strong {
+  color: #1e40af;
+  font-size: 13px;
+}
+
+.empty-coaching p {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.history-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.history-card .message-body {
+  color: #475569;
+  font-size: 12px;
+}
+
+.historical-note {
+  padding-top: 8px;
+  border-top: 1px solid rgb(148 163 184 / 25%);
+  color: #64748b !important;
+  font-size: 11px !important;
+}
+
+.quiet-note {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.developer-tools {
+  padding: 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 9px;
   color: #64748b;
   font-size: 11px;
 }
 
-.demo-tools {
-  margin-top: 20px;
-  padding-top: 14px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.demo-tools summary {
-  color: #64748b;
-  font-size: 12px;
+.developer-tools summary {
   cursor: pointer;
 }
 
-.demo-description {
-  margin: 12px 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.6;
+.developer-tools p {
+  line-height: 1.7;
 }
 
-.demo-buttons {
+.simulation-buttons {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
 }
 
-.demo-buttons button {
-  padding: 7px 9px;
+.simulation-buttons button {
+  padding: 7px 10px;
   border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #f8fafc;
+  border-radius: 7px;
+  background: white;
   color: #334155;
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 
-.demo-buttons button:hover {
-  background: #e2e8f0;
-}
-
-.demo-buttons .reset-button {
-  border-color: #fca5a5;
-  color: #b91c1c;
-}
-
-.demo-result {
-  margin: 12px 0 0;
-  color: #475569;
-  font-size: 12px;
-}
-
-.pending-note {
-  margin-top: 10px !important;
-  color: #9a3412 !important;
-  font-size: 12px;
-  line-height: 1.6;
+@media (prefers-reduced-motion: reduce) {
+  .agent-avatar {
+    transition: none;
+  }
 }
 </style>

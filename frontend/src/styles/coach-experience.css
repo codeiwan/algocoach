@@ -1,0 +1,93 @@
+/*
+ * AlgoCoach Agent Experience
+ *
+ * Presentation-only refinements for the right panel.
+ * The existing AI APIs, state and intervention policy
+ * are not changed.
+ */
+
+/* The agent card already identifies the coach.
+   Hide the redundant "AI Coach / LLM" panel title. */
+
+#app .coach-panel > .panel-header {
+  display: none;
+}
+
+/* Keep the right panel independently scrollable. */
+
+#app .coach-panel > .coach-content {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  min-height: 0;
+  padding: 13px;
+}
+
+/* Show the actual agent and latest feedback first. */
+
+#app .coach-panel .coach-content > .coach-feedback {
+  order: -3;
+  flex: 0 0 auto;
+}
+
+/* Retain the existing automatic-analysis toggle.
+   It remains OFF by default until Stage 5.7. */
+
+#app .coach-panel .coach-content > .control-card {
+  order: -2;
+  flex: 0 0 auto;
+  padding: 12px;
+  border-color: #e2e8f0;
+  background: #fff;
+}
+
+#app .coach-panel .coach-content > .control-card h3 {
+  font-size: 12px;
+}
+
+#app .coach-panel .coach-content > .control-card .control-description {
+  display: none;
+}
+
+#app .coach-panel .coach-content > .control-card .usage-count {
+  margin-top: 9px !important;
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* Hide developer-only observations from the learner.
+   The composables and data tracking continue to run. */
+
+#app .coach-panel .coach-content > .observation-card {
+  display: none;
+}
+
+/* Keep actual hint, review, and manual analysis tools
+   available until the interaction redesign in Stage 5.7. */
+
+#app .coach-panel .coach-content > .analyze-button {
+  flex-shrink: 0;
+}
+
+#app .coach-panel .coach-content > .feedback-card {
+  flex-shrink: 0;
+}
+
+/* Remove the redundant manual-analysis placeholder.
+   The real result and real errors still appear. */
+
+#app .coach-panel .coach-content > .empty-state {
+  display: none;
+}
+
+/* Long model messages must wrap without growing
+   the panel beyond its available width. */
+
+#app .coach-panel .coach-content > * {
+  min-width: 0;
+}
+
+#app .coach-panel .coach-content p,
+#app .coach-panel .coach-content li {
+  overflow-wrap: anywhere;
+}
