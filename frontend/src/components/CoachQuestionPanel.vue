@@ -30,18 +30,25 @@ const emit = defineEmits<{
   activity: [isActive: boolean]
 }>()
 
-const isOpen = ref(false)
-const isSending = ref(false)
+// --------------------------------------------------
+// Composer state
+// --------------------------------------------------
+
 const question = ref('')
+const isSending = ref(false)
 const errorMessage = ref('')
+
+// Keep recent exchanges for contextual follow-up
+// questions. The visible history belongs to the
+// unified AlgoCoach feed, not this input component.
 const exchanges = ref<Exchange[]>([])
 
 let nextExchangeId = 0
 let controller: AbortController | null = null
 
-function togglePanel() {
-  isOpen.value = !isOpen.value
-}
+// --------------------------------------------------
+// Conversation context
+// --------------------------------------------------
 
 function recentHistory(): CoachingConversationTurn[] {
   return exchanges.value
@@ -59,13 +66,46 @@ function recentHistory(): CoachingConversationTurn[] {
     ])
 }
 
-async function submitQuestion() {
-  const text = question.value.trim()
+// --------------------------------------------------
+// Keyboard interaction
+// --------------------------------------------------
 
-  if (!text || isSending.value) {
+function handleKeydown(event: KeyboardEvent) {
+  if (
+    event.key !== 'Enter' ||
+    event.shiftKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.isComposing ||
+    event.repeat
+  ) {
     return
   }
 
+  // Enter submits the question.
+  // Shift+Enter retains native newline behavior.
+  event.preventDefault()
+
+  void submitQuestion()
+}
+
+// --------------------------------------------------
+// Submit contextual coaching question
+// --------------------------------------------------
+
+async function submitQuestion() {
+  const text = question.value.trim()
+
+  if (
+    !text ||
+    isSending.value
+  ) {
+    return
+  }
+
+  // Preserve the code snapshot and Revision from
+  // the instant the question is submitted.
   const request = {
     session_id: props.sessionId,
     code_revision: props.currentRevision,
@@ -83,7 +123,8 @@ async function submitQuestion() {
   isSending.value = true
   errorMessage.value = ''
 
-  // Reflect the actual request lifecycle in the agent header.
+  // Notify the agent that an actual API request
+  // has started.
   emit('activity', true)
 
   try {
@@ -107,13 +148,16 @@ async function submitQuestion() {
       atMs: Date.now(),
     }
 
+    // Retain a bounded local conversation history.
     exchanges.value = [
       exchange,
       ...exchanges.value,
     ].slice(0, 20)
 
+    // Send the result to the unified agent feed.
     emit('answered', exchange)
 
+    // Clear only after a successful response.
     if (question.value.trim() === text) {
       question.value = ''
     }
@@ -125,22 +169,30 @@ async function submitQuestion() {
       return
     }
 
+    // Keep the original question available
+    // so the learner can retry without retyping.
     errorMessage.value =
       error instanceof Error
         ? error.message
-        : 'AI에게 질문하는 중 오류가 발생했습니다.'
+        : 'AI 질문 요청 중 오류가 발생했습니다.'
   } finally {
     if (controller === activeController) {
       controller = null
       isSending.value = false
+
       emit('activity', false)
     }
   }
 }
 
+// --------------------------------------------------
+// Cleanup
+// --------------------------------------------------
+
 onBeforeUnmount(() => {
   controller?.abort()
   controller = null
+
   emit('activity', false)
 })
 </script>
@@ -150,178 +202,287 @@ onBeforeUnmount(() => {
     class="question-panel"
     aria-label="AI 코치에게 질문하기"
   >
-    <button
-      type="button"
-      class="toggle-button"
-      :aria-expanded="isOpen"
-      @click="togglePanel"
+    <form
+      class="question-form"
+      @submit.prevent="submitQuestion"
     >
-      <span>AI에게 질문하기</span>
-      <span aria-hidden="true">{{ isOpen ? '−' : '+' }}</span>
-    </button>
-
-    <div
-      v-if="isOpen"
-      class="question-content"
-    >
-      <p class="helper-text">
-        문제, 현재 코드, 이전 코칭에 관해 자유롭게 질문하세요.
-        답변은 위쪽 AlgoCoach 대화 피드에 표시됩니다.
-      </p>
-
-      <form
-        class="question-form"
-        @submit.prevent="submitQuestion"
+      <label
+        for="coach-question-input"
+        class="composer-label"
       >
-        <label for="coach-question">
-          코치에게 질문
-        </label>
+        AI에게 질문
+      </label>
 
+      <div
+        class="composer"
+        :class="{
+          'composer-busy': isSending,
+          'composer-error': !!errorMessage,
+        }"
+      >
         <textarea
-          id="coach-question"
+          id="coach-question-input"
           v-model="question"
-          rows="3"
+          class="composer-input"
+          rows="2"
           maxlength="1000"
           :disabled="isSending"
-          placeholder="예: 왜 반복문에서 i를 더해야 하나요?"
+          placeholder="현재 코드나 문제에 대해 질문하세요..."
+          aria-label="AI 코치에게 질문할 내용"
+          @keydown="handleKeydown"
         />
 
-        <button
-          type="submit"
-          class="send-button"
-          :disabled="!question.trim() || isSending"
-        >
-          {{
-            isSending
-              ? 'AI 답변 생성 중...'
-              : '질문 보내기'
-          }}
-        </button>
-      </form>
+        <div class="composer-footer">
+          <span class="keyboard-hint">
+            Enter 전송 · Shift+Enter 줄바꿈
+          </span>
 
-      <p
-        v-if="isSending"
-        class="waiting"
-        role="status"
-      >
-        현재 코드와 질문을 바탕으로 답변을 생성하고 있습니다.
-      </p>
+          <button
+            type="submit"
+            class="send-button"
+            :disabled="!question.trim() || isSending"
+            :aria-label="
+              isSending
+                ? 'AI 답변 생성 중'
+                : 'AI에게 질문 전송'
+            "
+          >
+            <span>
+              {{
+                isSending
+                  ? '응답 중'
+                  : '전송'
+              }}
+            </span>
 
-      <p
-        v-if="errorMessage"
-        class="error"
-        role="alert"
-      >
-        {{ errorMessage }}
-      </p>
+            <span
+              v-if="!isSending"
+              class="send-arrow"
+              aria-hidden="true"
+            >
+              ↑
+            </span>
+          </button>
+        </div>
+      </div>
+    </form>
 
-      <p
-        v-if="exchanges.length > 0"
-        class="history-note"
-      >
-        질문 {{ exchanges.length }}건 · 답변은 위 대화 피드에서 확인
-      </p>
-    </div>
+    <p
+      v-if="isSending"
+      class="status-message"
+      role="status"
+    >
+      현재 코드와 질문을 바탕으로 답변을 생성하고 있습니다.
+    </p>
+
+    <p
+      v-if="errorMessage"
+      class="error-message"
+      role="alert"
+    >
+      {{ errorMessage }}
+    </p>
   </section>
 </template>
 
 <style scoped>
+/* --------------------------------------------------
+   Question composer container
+-------------------------------------------------- */
+
 .question-panel {
-  min-width: 0;
-  border: 1px solid #bfdbfe;
-  border-radius: 12px;
-  background: #fff;
-}
-
-.toggle-button {
-  display: flex;
-  width: 100%;
-  min-height: 46px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 0;
-  border-radius: 12px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.question-content {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-  padding: 14px;
-}
+  gap: 7px;
 
-.helper-text,
-.history-note {
-  margin: 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.7;
+  min-width: 0;
+
+  border: none;
+  border-radius: 10px;
+  background: transparent;
 }
 
 .question-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
+
+  min-width: 0;
 }
 
-.question-form label {
-  color: #334155;
-  font-size: 12px;
+.composer-label {
+  padding-left: 2px;
+
+  color: #475569;
+  font-size: 11px;
   font-weight: 700;
 }
 
-.question-form textarea {
-  box-sizing: border-box;
-  width: 100%;
+/* --------------------------------------------------
+   Composer
+-------------------------------------------------- */
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  min-width: 0;
+
   padding: 10px;
+
   border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: white;
+  border-radius: 11px;
+
+  background: #fff;
+
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.composer:focus-within {
+  border-color: #60a5fa;
+
+  box-shadow:
+    0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.composer-busy {
+  background: #f8fafc;
+}
+
+.composer-error {
+  border-color: #fca5a5;
+}
+
+.composer-input {
+  box-sizing: border-box;
+
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  max-height: 110px;
+
+  padding: 1px 2px;
+
+  border: none;
+  border-radius: 0;
+  outline: none;
+
+  background: transparent;
   color: #0f172a;
+
   font: inherit;
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.65;
+
   resize: vertical;
 }
 
+.composer-input::placeholder {
+  color: #94a3b8;
+}
+
+.composer-input:disabled {
+  color: #64748b;
+  cursor: wait;
+}
+
+/* --------------------------------------------------
+   Bottom controls
+-------------------------------------------------- */
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  min-width: 0;
+}
+
+.keyboard-hint {
+  min-width: 0;
+
+  color: #94a3b8;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 .send-button {
-  min-height: 40px;
-  padding: 10px 12px;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  min-height: 31px;
+  padding: 6px 11px;
+
   border: none;
   border-radius: 8px;
+
   background: #2563eb;
-  color: white;
+  color: #fff;
+
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
+
   cursor: pointer;
 }
 
+.send-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
 .send-button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.waiting {
-  margin: 0;
-  color: #1d4ed8;
-  font-size: 12px;
-  line-height: 1.7;
+.send-arrow {
+  font-size: 15px;
+  line-height: 1;
 }
 
-.error {
+/* --------------------------------------------------
+   Status and error messages
+-------------------------------------------------- */
+
+.status-message,
+.error-message {
   margin: 0;
+  padding: 0 2px;
+
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.status-message {
+  color: #2563eb;
+}
+
+.error-message {
   color: #b91c1c;
-  font-size: 12px;
-  line-height: 1.7;
+}
+
+/* --------------------------------------------------
+   Narrow screen
+-------------------------------------------------- */
+
+@media (max-width: 420px) {
+  .keyboard-hint {
+    font-size: 9px;
+  }
+
+  .composer {
+    padding: 8px;
+  }
+
+  .send-button {
+    padding: 6px 9px;
+  }
 }
 </style>
