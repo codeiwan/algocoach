@@ -5,6 +5,9 @@ from fastapi import FastAPI, Request
 
 from app.agents.graph import create_analysis_graph
 from app.api.analysis import router as analysis_router
+from app.api.coaching_question import (
+    router as coaching_question_router,
+)
 from app.api.hints import router as hints_router
 from app.api.problems import router as problems_router
 from app.api.session_completion import (
@@ -59,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     app.state.session_completion_store = completion_store
 
-    # Feedback depends on the same completion store.
+    # Feedback shares the completion database.
     app.state.session_feedback_store = SessionFeedbackStore(
         completion_store=completion_store,
     )
@@ -88,6 +91,7 @@ app.include_router(hints_router)
 app.include_router(submission_router)
 app.include_router(session_completion_router)
 app.include_router(session_feedback_router)
+app.include_router(coaching_question_router)
 
 
 # --------------------------------------------------
