@@ -152,6 +152,24 @@ const autoAnalysisLimitReached = computed(
 )
 
 // --------------------------------------------------
+// AI question activity — Stage 5.8B
+// --------------------------------------------------
+
+/**
+ * This reflects an actual question request lifecycle.
+ * It is not inferred from the model's internal reasoning.
+ */
+const isQuestionAnswering = ref(false)
+
+function handleQuestionActivity(isActive: boolean) {
+  if (completionOutcome.value !== null) {
+    return
+  }
+
+  isQuestionAnswering.value = isActive
+}
+
+// --------------------------------------------------
 // Unified question history
 // --------------------------------------------------
 
@@ -719,9 +737,9 @@ async function saveCoachingFeedback(
     feedbackError.value = timedOut
       ? '평가 저장 응답이 지연되었습니다. 동일한 요청으로 재시도할 수 있습니다.'
       : (
-          error instanceof Error
-            ? error.message
-            : '코칭 평가 저장 중 오류가 발생했습니다.'
+            error instanceof Error
+              ? error.message
+              : '코칭 평가 저장 중 오류가 발생했습니다.'
         )
   } finally {
     clearTimeout(timeoutId)
@@ -761,6 +779,7 @@ function handleSessionCompleted(
   autoAbortController = null
 
   isAutoAnalyzing.value = false
+  isQuestionAnswering.value = false
 
   if (observationTimer !== null) {
     clearTimeout(observationTimer)
@@ -794,6 +813,8 @@ onBeforeUnmount(() => {
 
   feedbackController?.abort()
   feedbackController = null
+
+  isQuestionAnswering.value = false
 })
 
 function returnToProblemInput() {
@@ -1079,6 +1100,11 @@ function returnToProblemInput() {
         </div>
 
         <div class="coach-content">
+          <!--
+            Stage 5.8B:
+            Forward real editor and API activity
+            to the agent status display.
+          -->
           <CoachInterventionPanel
             :analysis-result="autoAnalysisResult"
             :manual-analysis-result="analysisResult"
@@ -1087,6 +1113,11 @@ function returnToProblemInput() {
             :auto-enabled="autoAnalysisEnabled"
             :is-auto-analyzing="isAutoAnalyzing"
             :is-manual-analyzing="isAnalyzing"
+            :is-question-answering="isQuestionAnswering"
+            :observation-phase="observationPhase"
+            :auto-analysis-limit-reached="autoAnalysisLimitReached"
+            :auto-analysis-error="autoAnalysisError"
+            :manual-analysis-error="errorMessage"
             :question-exchanges="questionExchanges"
           />
 
@@ -1138,6 +1169,10 @@ function returnToProblemInput() {
               }}
             </button>
 
+            <!--
+              Question activity events are forwarded
+              to the main agent status.
+            -->
             <CoachQuestionPanel
               :session-id="sessionId"
               :problem-text="problemText"
@@ -1146,6 +1181,7 @@ function returnToProblemInput() {
               :current-revision="codeRevision"
               :latest-coaching="latestCoachingText"
               @answered="handleQuestionAnswered"
+              @activity="handleQuestionActivity"
             />
 
             <details class="secondary-tools">

@@ -27,6 +27,7 @@ interface Exchange {
 
 const emit = defineEmits<{
   answered: [exchange: Exchange]
+  activity: [isActive: boolean]
 }>()
 
 const isOpen = ref(false)
@@ -82,6 +83,9 @@ async function submitQuestion() {
   isSending.value = true
   errorMessage.value = ''
 
+  // Reflect the actual request lifecycle in the agent header.
+  emit('activity', true)
+
   try {
     const result = await askCoachingQuestion(
       request,
@@ -103,14 +107,11 @@ async function submitQuestion() {
       atMs: Date.now(),
     }
 
-    // Keep conversation context locally for the next request.
     exchanges.value = [
       exchange,
       ...exchanges.value,
     ].slice(0, 20)
 
-    // The parent forwards the completed exchange
-    // to the shared AlgoCoach conversation feed.
     emit('answered', exchange)
 
     if (question.value.trim() === text) {
@@ -132,6 +133,7 @@ async function submitQuestion() {
     if (controller === activeController) {
       controller = null
       isSending.value = false
+      emit('activity', false)
     }
   }
 }
@@ -139,6 +141,7 @@ async function submitQuestion() {
 onBeforeUnmount(() => {
   controller?.abort()
   controller = null
+  emit('activity', false)
 })
 </script>
 
@@ -154,10 +157,7 @@ onBeforeUnmount(() => {
       @click="togglePanel"
     >
       <span>AI에게 질문하기</span>
-
-      <span aria-hidden="true">
-        {{ isOpen ? '−' : '+' }}
-      </span>
+      <span aria-hidden="true">{{ isOpen ? '−' : '+' }}</span>
     </button>
 
     <div
@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
     >
       <p class="helper-text">
         문제, 현재 코드, 이전 코칭에 관해 자유롭게 질문하세요.
-        AI 답변은 위쪽 AlgoCoach 대화 피드에 표시됩니다.
+        답변은 위쪽 AlgoCoach 대화 피드에 표시됩니다.
       </p>
 
       <form
