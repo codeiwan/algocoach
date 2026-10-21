@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import CodeEditor from '@/components/CodeEditor.vue'
 import CoachInterventionPanel from '@/components/CoachInterventionPanel.vue'
 import ProblemReadingPanel from '@/components/ProblemReadingPanel.vue'
+import ProgressiveHintPanel from '@/components/ProgressiveHintPanel.vue'
 
 import { useCodeHistory } from '@/composables/useCodeHistory'
 import { useIdleDetection } from '@/composables/useIdleDetection'
@@ -27,6 +28,14 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
 }>()
+
+// --------------------------------------------------
+// Session
+// --------------------------------------------------
+
+// A new workspace receives a new unique session ID.
+// The ID remains stable during code edits and language changes.
+const sessionId = crypto.randomUUID()
 
 // --------------------------------------------------
 // Editor state
@@ -250,9 +259,8 @@ async function runAnalysis() {
 
   try {
     const result = await analyzeCode({
-      session_id: 'vue-dev-session',
+      session_id: sessionId,
       code_revision: revision,
-      // Always send the complete original problem.
       problem_text: props.problemText,
       current_code: codeSnapshot,
       language: languageSnapshot,
@@ -303,7 +311,7 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
   const controller = new AbortController()
   autoAbortController = controller
 
-  // Count attempts, including failed or cancelled requests.
+  // Failed or cancelled attempts count toward the development limit.
   autoAnalysisCalls.value += 1
 
   isAutoAnalyzing.value = true
@@ -313,9 +321,8 @@ async function runAutomaticAnalysis(snapshot: CodeSnapshot) {
   try {
     const result = await analyzeCode(
       {
-        session_id: 'vue-dev-session',
+        session_id: sessionId,
         code_revision: snapshot.revision,
-        // The original statement is preserved for the LLM.
         problem_text: props.problemText,
         current_code: snapshot.code,
         language: snapshot.language,
@@ -609,6 +616,15 @@ function returnToProblemInput() {
             :current-revision="codeRevision"
           />
 
+          <!-- User-requested Progressive Hints -->
+          <ProgressiveHintPanel
+            :session-id="sessionId"
+            :problem-text="problemText"
+            :current-code="currentCode"
+            :language="selectedLanguage"
+            :current-revision="codeRevision"
+          />
+
           <!-- Manual Analysis -->
           <button
             type="button"
@@ -695,7 +711,7 @@ function returnToProblemInput() {
 
 .workspace-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 20px;
